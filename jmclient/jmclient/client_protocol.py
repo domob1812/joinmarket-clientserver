@@ -263,12 +263,8 @@ class JMMakerClientProtocol(JMClientProtocol):
             self.finalized_offers[nick] = offer
             tx = btc.deserialize(txhex)
             self.finalized_offers[nick]["txd"] = tx
-            jm_single().bc_interface.add_tx_notify(tx, self.unconfirm_callback,
-                    self.confirm_callback, offer["cjaddr"],
-                    wallet_name=jm_single().bc_interface.get_wallet_name(
-                        self.client.wallet),
-                    txid_flag=False,
-                    vb=get_p2sh_vbyte())
+            self.client.ws.register_callbacks([self.unconfirm_callback], True)
+            self.client.ws.register_callbacks([self.confirm_callback], False)
             d = self.callRemote(commands.JMTXSigs,
                                 nick=nick,
                                 sigs=json.dumps(sigs))
@@ -283,23 +279,19 @@ class JMMakerClientProtocol(JMClientProtocol):
             if v["txd"]["outs"] == txd["outs"]:
                 offerinfo = v
                 break
-        if not offerinfo:
-            jlog.info("Failed to find notified unconfirmed transaction: " + txid)
-            return
-        removed_utxos = self.client.wallet.remove_old_utxos(txd)
-        jlog.info('saw tx on network, removed_utxos=\n{}'.format('\n'.join(
-            '{} - {}'.format(u, fmt_tx_data(tx_data, self.client.wallet))
-            for u, tx_data in removed_utxos.items())))
+        if offerinfo is None:
+            return False
         to_cancel, to_announce = self.client.on_tx_unconfirmed(offerinfo,
-                                                               txid, removed_utxos)
+                                                               txid)
         self.client.modify_orders(to_cancel, to_announce)
         d = self.callRemote(commands.JMAnnounceOffers,
                             to_announce=json.dumps(to_announce),
                             to_cancel=json.dumps(to_cancel),
                             offerlist=json.dumps(self.client.offerlist))
         self.defaultCallbacks(d)
+        return True
 
-    def confirm_callback(self, txd, txid, confirmations):
+    def confirm_callback(self, txd, txid):
         #find the offer for this tx
         offerinfo = None
         for k,v in iteritems(self.finalized_offers):
@@ -307,28 +299,18 @@ class JMMakerClientProtocol(JMClientProtocol):
             if v["txd"]["outs"] == txd["outs"]:
                 offerinfo = v
                 break
-        if not offerinfo:
-            jlog.info("Failed to find notified unconfirmed transaction: " + txid)
-            return
-        jm_single().bc_interface.wallet_synced = False
-        jm_single().bc_interface.sync_unspent(self.client.wallet)
+        if offerinfo is None:
+            return False
         jlog.info('tx in a block: ' + txid)
-        self.wait_for_sync_loop = task.LoopingCall(self.modify_orders, offerinfo,
-                                                   confirmations, txid)
-        self.wait_for_sync_loop.start(2.0)
-
-    def modify_orders(self, offerinfo, confirmations, txid):
-        if not jm_single().bc_interface.wallet_synced:
-            return
-        self.wait_for_sync_loop.stop()
         to_cancel, to_announce = self.client.on_tx_confirmed(offerinfo,
-                                                             confirmations, txid)
+                                                     txid)
         self.client.modify_orders(to_cancel, to_announce)
         d = self.callRemote(commands.JMAnnounceOffers,
-                            to_announce=json.dumps(to_announce),
-                            to_cancel=json.dumps(to_cancel),
-                            offerlist=json.dumps(self.client.offerlist))
+                        to_announce=json.dumps(to_announce),
+                        to_cancel=json.dumps(to_cancel),
+                        offerlist=json.dumps(self.client.offerlist))
         self.defaultCallbacks(d)
+        return True
 
 class JMTakerClientProtocol(JMClientProtocol):
 

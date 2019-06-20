@@ -20,7 +20,7 @@ import random
 from jmbase import jmprint
 from jmclient import YieldGeneratorBasic, load_program_config, jm_single,\
     sync_wallet, JMClientProtocolFactory, start_reactor, SegwitWallet,\
-    SegwitLegacyWallet, cryptoengine
+    SegwitLegacyWallet, cryptoengine, WalletService
 
 
 class MaliciousYieldGenerator(YieldGeneratorBasic):
@@ -138,8 +138,9 @@ def test_start_ygs(setup_ygrunner, num_ygs, wallet_structures, mean_amt,
     for i in range(num_ygs):
         
         cfg = [txfee, cjfee_a, cjfee_r, ordertype, minsize]
-        sync_wallet(wallets[i]["wallet"], fast=True)
-        yg = ygclass(wallets[i]["wallet"], cfg)
+        ws = WalletService(wallets[i]["wallet"])
+        ws.startService()
+        yg = ygclass(ws, cfg)
         if malicious:
             yg.set_maliciousness(malicious, mtype="tx")
         clientfactory = JMClientProtocolFactory(yg, proto_type="MAKER")

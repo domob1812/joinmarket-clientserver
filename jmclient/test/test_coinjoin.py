@@ -12,7 +12,7 @@ import pytest
 from twisted.internet import reactor
 
 from jmbase import get_log
-from jmclient import load_program_config, jm_single, \
+from jmclient import load_program_config, jm_single, WalletService,\
     YieldGeneratorBasic, Taker, sync_wallet, LegacyWallet, SegwitLegacyWallet
 from jmclient.podle import set_commitment_file
 from commontest import make_wallets, binarize_tx
@@ -30,6 +30,12 @@ def make_wallets_to_list(make_wallets_data):
     assert all(wallets)
     return wallets
 
+def wallets_to_wallet_services(wallets):
+    ws = []
+    for i in range(len(wallets)):
+        ws.append(WalletService(wallets[i]))
+        ws[-1].startService()
+    return ws
 
 def sync_wallets(wallets):
     for w in wallets:
@@ -124,10 +130,11 @@ def test_simple_coinjoin(monkeypatch, tmpdir, setup_cj, wallet_cls):
         mean_amt=1, wallet_cls=wallet_cls))
 
     jm_single().bc_interface.tickchain()
-    sync_wallets(wallets)
+    jm_single().bc_interface.tickchain()
+    ws = wallets_to_wallet_services(wallets)
 
     makers = [YieldGeneratorBasic(
-        wallets[i],
+        ws[i],
         [0, 2000, 0, 'swabsoffer', 10**7]) for i in range(MAKER_NUM)]
 
     orderbook = create_orderbook(makers)
@@ -166,11 +173,12 @@ def test_coinjoin_mixdepth_wrap_taker(monkeypatch, tmpdir, setup_cj):
 
     jm_single().bc_interface.tickchain()
     jm_single().bc_interface.tickchain()
-    sync_wallets(wallets)
+
+    ws = wallets_to_wallet_services(wallets)
 
     cj_fee = 2000
     makers = [YieldGeneratorBasic(
-        wallets[i],
+        ws[i],
         [0, cj_fee, 0, 'swabsoffer', 10**7]) for i in range(MAKER_NUM)]
 
     orderbook = create_orderbook(makers)
@@ -220,11 +228,12 @@ def test_coinjoin_mixdepth_wrap_maker(monkeypatch, tmpdir, setup_cj):
 
     jm_single().bc_interface.tickchain()
     jm_single().bc_interface.tickchain()
-    sync_wallets(wallets)
+
+    ws = wallets_to_wallet_services(wallets)
 
     cj_fee = 2000
     makers = [YieldGeneratorBasic(
-        wallets[i],
+        ws[i],
         [0, cj_fee, 0, 'swabsoffer', 10**7]) for i in range(MAKER_NUM)]
 
     orderbook = create_orderbook(makers)
@@ -281,10 +290,11 @@ def test_coinjoin_mixed_maker_addresses(monkeypatch, tmpdir, setup_cj,
 
     jm_single().bc_interface.tickchain()
     jm_single().bc_interface.tickchain()
-    sync_wallets(wallets)
+
+    ws = wallets_to_wallet_services(wallets)
 
     makers = [YieldGeneratorBasic(
-        wallets[i],
+        ws[i],
         [0, 2000, 0, 'swabsoffer', 10**7]) for i in range(MAKER_NUM)]
 
     orderbook = create_orderbook(makers)

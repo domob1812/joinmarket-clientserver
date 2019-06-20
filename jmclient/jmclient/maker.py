@@ -24,9 +24,9 @@ from .cryptoengine import EngineError
 jlog = get_log()
 
 class Maker(object):
-    def __init__(self, wallet):
+    def __init__(self, wallet_service):
         self.active_orders = {}
-        self.wallet = wallet
+        self.ws = wallet_service
         self.nextoid = -1
         self.offerlist = None
         self.sync_wait_loop = task.LoopingCall(self.try_to_create_my_orders)
@@ -40,7 +40,7 @@ class Maker(object):
         is flagged as True. TODO: Use a deferred, probably.
         Note that create_my_orders() is defined by subclasses.
         """
-        if not jm_single().bc_interface.wallet_synced:
+        if not self.ws.synced:
             return
         self.offerlist = self.create_my_orders()
         self.sync_wait_loop.stop()
@@ -89,7 +89,7 @@ class Maker(object):
             return reject(reason)
 
         try:
-            if not self.wallet.pubkey_has_script(
+            if not self.ws.wallet.pubkey_has_script(
                     unhexlify(cr_dict['P']), unhexlify(res[0]['script'])):
                 raise EngineError()
         except EngineError:
@@ -102,13 +102,14 @@ class Maker(object):
         if not utxos:
             #could not find funds
             return (False,)
-        self.wallet.update_cache_index()
+        # for index update persistence:
+        self.ws.wallet.save()
         # Construct data for auth request back to taker.
         # Need to choose an input utxo pubkey to sign with
         # (no longer using the coinjoin pubkey from 0.2.0)
         # Just choose the first utxo in self.utxos and retrieve key from wallet.
         auth_address = utxos[list(utxos.keys())[0]]['address']
-        auth_key = self.wallet.get_key_from_addr(auth_address)
+        auth_key = self.ws.wallet.get_key_from_addr(auth_address)
         auth_pub = btc.privtopub(auth_key)
         btc_sig = btc.ecdsa_sign(kphex, auth_key)
         return (True, utxos, auth_pub, cj_addr, change_addr, btc_sig)
@@ -137,11 +138,11 @@ class Maker(object):
             utxo = ins['outpoint']['hash'] + ':' + str(ins['outpoint']['index'])
             if utxo not in utxos:
                 continue
-            script = self.wallet.addr_to_script(utxos[utxo]['address'])
+            script = self.ws.wallet.addr_to_script(utxos[utxo]['address'])
             amount = utxos[utxo]['value']
             our_inputs[index] = (script, amount)
 
-        txs = self.wallet.sign_tx(btc.deserialize(unhexlify(txhex)), our_inputs)
+        txs = self.ws.wallet.sign_tx(btc.deserialize(unhexlify(txhex)), our_inputs)
         for index in our_inputs:
             sigmsg = unhexlify(txs['ins'][index]['script'])
             if 'txinwitness' in txs['ins'][index]:
@@ -618,7 +619,7 @@ class P2EPMaker(Maker):
         jm_single().bc_interface.add_tx_notify(txs,
             self.on_tx_unconfirmed, self.on_tx_confirmed,
             self.destination_addr,
-            wallet_name=jm_single().bc_interface.get_wallet_name(self.wallet),
+            wallet_name=jm_single().bc_interface.get_wallet_name(self.ws.wallet),
             txid_flag=False, vb=self.wallet._ENGINE.VBYTE)
         # The blockchain interface just abandons monitoring if the transaction
         # is not broadcast before the configured timeout; we want to take

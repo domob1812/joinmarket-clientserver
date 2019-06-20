@@ -18,15 +18,17 @@ from decimal import Decimal
 from numbers import Integral
 
 
-from .configure import jm_single
+from .configure import jm_single, get_log
 from .support import select_gradual, select_greedy, select_greediest, \
     select
+from .output import fmt_tx_data
 from .cryptoengine import TYPE_P2PKH, TYPE_P2SH_P2WPKH,\
     TYPE_P2WPKH, ENGINES
 from .support import get_random_bytes
 from . import mn_encode, mn_decode
 import jmbitcoin as btc
 
+jlog = get_log()
 
 """
 transaction dict format:
@@ -570,6 +572,10 @@ class BaseWallet(object):
         for (txid, index), val in ret.items():
             val['address'] = self.get_addr_path(val['path'])
             removed_utxos[hexlify(txid).decode('ascii') + ':' + str(index)] = val
+        if len(removed_utxos.keys()) > 0:
+            jlog.info('saw tx on network, removed_utxos=\n{}'.format('\n'.join(
+            '{} - {}'.format(u, fmt_tx_data(tx_data, self))
+            for u, tx_data in removed_utxos.items())))
         return removed_utxos
 
     def remove_old_utxos_(self, tx):
@@ -645,6 +651,19 @@ class BaseWallet(object):
         path = self.script_to_path(script)
         mixdepth = self._get_mixdepth_from_path(path)
         self._utxos.add_utxo(txid, index, path, value, mixdepth)
+
+    def process_new_tx(self, txd, txid):
+        """ Given a newly seen transaction, deserialized as txd and
+        with transaction id, process its inputs and outputs and update
+        the utxo contents of this wallet accordingly.
+        NOTE: this should correctly handle transactions that are not
+        actually related to the wallet; it will not add (or remove,
+        obviously) utxos that were not related since the underlying
+        functions check this condition.
+        """
+        removed_utxos = self.remove_old_utxos(txd)
+        added_utxos = self.add_new_utxos(txd, txid)
+        return (removed_utxos, added_utxos)
 
     @deprecated
     def select_utxos(self, mixdepth, amount, utxo_filter=None, select_fn=None):

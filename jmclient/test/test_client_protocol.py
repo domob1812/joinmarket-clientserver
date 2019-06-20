@@ -83,11 +83,15 @@ class DummyWallet(object):
     def get_wallet_id(self):
         return 'aaaa'
 
+class DummyWalletService(object):
+    wallet = DummyWallet()
+    def register_callbacks(self, callbacks, unconfirmed=True):
+        pass
 
 class DummyMaker(Maker):
     def __init__(self):
         self.aborted = False
-        self.wallet = DummyWallet()
+        self.ws = DummyWalletService()
         self.offerlist = self.create_my_orders()
 
     def try_to_create_my_orders(self):

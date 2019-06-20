@@ -346,7 +346,7 @@ class BitcoinCoreInterface(BlockchainInterface):
     def rpc(self, method, args):
         if method not in ['importaddress', 'walletpassphrase', 'getaccount',
                           'gettransaction', 'getrawtransaction', 'gettxout',
-                          'importmulti']:
+                          'importmulti', 'listtransactions']:
             log.debug('rpc: ' + method + " " + str(args))
         res = self.jsonRpc.call(method, args)
         return res
@@ -567,6 +567,11 @@ class BitcoinCoreInterface(BlockchainInterface):
 
     @staticmethod
     def _get_used_indices(wallet, addr_gen):
+        """ Returns a dict of max used indices for each branch in
+        the wallet, from the given addresses addr_gen, assuming
+        that they are known to the wallet.
+        """
+
         indices = {x: [0, 0] for x in range(wallet.max_mixdepth + 1)}
 
         for addr in addr_gen:
@@ -583,6 +588,11 @@ class BitcoinCoreInterface(BlockchainInterface):
 
     @staticmethod
     def _check_gap_indices(wallet, used_indices):
+        """ Return False if any of the provided indices (which should be
+        those seen from listtransactions as having been used, for
+        this wallet/label) are higher than the ones recorded in the index
+        cache."""
+
         for md in used_indices:
             for internal in (0, 1):
                 if used_indices[md][internal] >\
@@ -592,6 +602,12 @@ class BitcoinCoreInterface(BlockchainInterface):
 
     @staticmethod
     def _collect_addresses_init(wallet):
+        """ Collects the "current" set of addresses,
+        as defined by the indices recorded in the wallet's
+        index cache (persisted in the wallet file usually).
+        Note that it collects up to the current indices plus
+        the gap limit.
+        """
         addresses = set()
         saved_indices = dict()
 
@@ -603,8 +619,11 @@ class BitcoinCoreInterface(BlockchainInterface):
                     addresses.add(wallet.get_addr(md, internal, index))
                 for index in range(wallet.gap_limit):
                     addresses.add(wallet.get_new_addr(md, internal))
+                # reset the indices to the value we had before the
+                # new address calls:
                 wallet.set_next_index(md, internal, next_unused)
                 saved_indices[md][internal] = next_unused
+            # include any imported addresses
             for path in wallet.yield_imported_paths(md):
                 addresses.add(wallet.get_addr_path(path))
 
@@ -689,6 +708,37 @@ class BitcoinCoreInterface(BlockchainInterface):
         hexval = str(rpcretval["hex"])
         return btc.deserialize(hexval)
 
+    def list_transactions(self, num):
+        """ Return a list of the last `num` transactions seen
+        in the wallet (under any label/account).
+        """
+        return self.rpc("listtransactions", ["*", num, 0, True])
+
+    def get_transaction(self, txid):
+        """ Returns a serialized transaction for txid txid,
+        in hex as returned by Bitcoin Core rpc, or None
+        if no transaction can be retrieved. Works also for
+        watch-only wallets.
+        """
+        #changed syntax in 0.14.0; allow both syntaxes
+        try:
+            res = self.rpc("gettransaction", [txid, True])
+        except:
+            try:
+                res = self.rpc("gettransaction", [txid, 1])
+            except JsonRpcError as e:
+                #This should never happen (gettransaction is a wallet rpc).
+                log.warn("Failed gettransaction call; JsonRpcError")
+                return None
+            except Exception as e:
+                log.warn("Failed gettransaction call; unexpected error:")
+                log.warn(str(e))
+                return None
+        if "confirmations" not in res:
+            log.warning("Malformed gettx result: " + str(res))
+            return None
+        return res
+
     def outputs_watcher(self, wallet_name, notifyaddr, tx_output_set,
                         unconfirmfun, confirmfun, timeoutfun):
         """Given a key for the watcher loop (notifyaddr), a wallet name (label),
@@ -698,27 +748,11 @@ class BitcoinCoreInterface(BlockchainInterface):
         End the loop when the confirmation has been seen (no spent monitoring here).
         """
         wl = self.tx_watcher_loops[notifyaddr]
-        txlist = self.rpc("listtransactions", ["*", 100, 0, True])
+        txlist = self.list_transactions(100)
         for tx in txlist[::-1]:
-            #changed syntax in 0.14.0; allow both syntaxes
-            try:
-                res = self.rpc("gettransaction", [tx["txid"], True])
-            except:
-                try:
-                    res = self.rpc("gettransaction", [tx["txid"], 1])
-                except JsonRpcError as e:
-                    #This should never happen (gettransaction is a wallet rpc).
-                    log.warn("Failed gettransaction call; JsonRpcError")
-                    res = None
-                except Exception as e:
-                    log.warn("Failed gettransaction call; unexpected error:")
-                    log.warn(str(e))
-                    res = None
+            res = self.get_transaction(tx["txid"])
             if not res:
                 continue
-            if "confirmations" not in res:
-                log.debug("Malformed gettx result: " + str(res))
-                return
             txd = self.get_deser_from_gettransaction(res)
             if txd is None:
                 continue
@@ -753,14 +787,8 @@ class BitcoinCoreInterface(BlockchainInterface):
         """
         txid = btc.txhash(btc.serialize(txd))
         wl = self.tx_watcher_loops[txid]
-        try:
-            res = self.rpc('gettransaction', [txid, True])
-        except JsonRpcError as e:
-            return
+        res = self.get_transaction(txid)
         if not res:
-            return
-        if "confirmations" not in res:
-            log.debug("Malformed gettx result: " + str(res))
             return
         if not wl[1] and res["confirmations"] == 0:
             log.debug("Tx: " + str(txid) + " seen on network.")
@@ -802,18 +830,9 @@ class BitcoinCoreInterface(BlockchainInterface):
             #transaction must be in the recent list retrieved via listunspent.
             #For each one, use gettransaction to check its inputs.
             #This is a bit expensive, but should only occur once.
-            txlist = self.rpc("listtransactions", ["*", 1000, 0, True])
+            txlist = self.list_transactions(1000)
             for tx in txlist[::-1]:
-                #changed syntax in 0.14.0; allow both syntaxes
-                try:
-                    res = self.rpc("gettransaction", [tx["txid"], True])
-                except:
-                    try:
-                        res = self.rpc("gettransaction", [tx["txid"], 1])
-                    except:
-                        #This should never happen (gettransaction is a wallet rpc).
-                        log.info("Failed any gettransaction call")
-                        res = None
+                res = self.get_transaction(tx["txid"])
                 if not res:
                     continue
                 deser = self.get_deser_from_gettransaction(res)

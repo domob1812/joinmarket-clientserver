@@ -46,6 +46,7 @@ from .wallet_utils import (
     wallet_tool_main, wallet_generate_recover_bip39, open_wallet,
     open_test_wallet_maybe, create_wallet, get_wallet_cls, get_wallet_path,
     wallet_display, get_utxos_enabled_disabled)
+from .wallet_service import WalletService
 from .maker import Maker, P2EPMaker
 from .yieldgenerator import YieldGenerator, YieldGeneratorBasic, ygmain
 # Set default logging handler to avoid "No handler found" warnings.
