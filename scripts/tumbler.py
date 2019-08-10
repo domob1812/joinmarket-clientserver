@@ -44,7 +44,7 @@ def main():
                               "blockchain_source") == "electrum-server":
         jm_single().bc_interface.synctype = "with-script"
     while not jm_single().bc_interface.wallet_synced:
-        sync_wallet(wallet, fast=options['fastsync'])
+        sync_wallet(wallet, fast=not options['recoversync'])
 
     maxcjfee = get_max_cj_fee_values(jm_single().config, options_org)
     log.info("Using maximum coinjoin fee limits per maker of {:.4%}, {} sat"

@@ -146,12 +146,12 @@ def main():
         help='only validate the provided utxos (file or command line), not add',
         default=False
     )
-    parser.add_option('--fast',
+    parser.add_option('--recoversync',
                       action='store_true',
-                      dest='fastsync',
+                      dest='recoversync',
                       default=False,
-                      help=('choose to do fast wallet sync, only for Core and '
-                      'only for previously synced wallet'))
+                      help=('choose to do detailed wallet sync, '
+                            'used for recovering on new Core instance.'))
     (options, args) = parser.parse_args()
     load_program_config()
     #TODO; sort out "commit file location" global so this script can
@@ -180,7 +180,7 @@ def main():
         wallet_path = get_wallet_path(options.loadwallet, None)
         wallet = open_wallet(wallet_path, gap_limit=options.gaplimit)
         while not jm_single().bc_interface.wallet_synced:
-            sync_wallet(wallet, fast=options.fastsync)
+            sync_wallet(wallet, fast=not options.recoversync)
 
         # minor note: adding a utxo from an external wallet for commitments, we
         # default to not allowing disabled utxos to avoid a privacy leak, so the

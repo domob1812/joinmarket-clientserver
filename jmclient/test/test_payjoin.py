@@ -16,10 +16,20 @@ from jmclient import (load_program_config, jm_single, sync_wallet,
                       P2EPMaker, P2EPTaker,
                       LegacyWallet, SegwitLegacyWallet, SegwitWallet)
 from commontest import make_wallets
-from test_coinjoin import make_wallets_to_list, sync_wallets, create_orderbook
+from test_coinjoin import make_wallets_to_list, create_orderbook
 
 testdir = os.path.dirname(os.path.realpath(__file__))
 log = get_log()
+
+def sync_wallets(wallets):
+    for w in wallets:
+        jm_single().bc_interface.wallet_synced = False
+        for x in range(20):
+            if jm_single().bc_interface.wallet_synced:
+                break
+            sync_wallet(w)
+        else:
+            assert False, "Failed to sync wallet"
 
 def create_taker(wallet, schedule, monkeypatch):
     taker = P2EPTaker("fakemaker", wallet, schedule,
@@ -48,8 +58,7 @@ def final_checks(wallets, amount, txfee, tsb, msb, source_mixdepth=0):
     of two entries, source and destination mixdepth respectively.
     """
     jm_single().bc_interface.tickchain()
-    for wallet in wallets:
-        sync_wallet(wallet)
+    sync_wallets(wallets)
     takerbals = getbals(wallets[1], source_mixdepth)
     makerbals = getbals(wallets[0], source_mixdepth)
     # is the payment received?

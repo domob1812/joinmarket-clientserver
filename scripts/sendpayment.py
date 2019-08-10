@@ -134,7 +134,7 @@ def main():
         jm_single().bc_interface.synctype = "with-script"
     #wallet sync will now only occur on reactor start if we're joining.
     while not jm_single().bc_interface.wallet_synced:
-        sync_wallet(wallet, fast=options.fastsync)
+        sync_wallet(wallet, fast=not options.recoversync)
     if options.makercount == 0 and not options.p2ep:
         direct_send(wallet, amount, mixdepth, destaddr, options.answeryes)
         return

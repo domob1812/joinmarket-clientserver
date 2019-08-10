@@ -33,12 +33,12 @@ def add_common_options(parser):
         'for the total transaction fee, default=dynamically estimated, note that this is adjusted '
         'based on the estimated fee calculated after tx construction, based on '
         'policy set in joinmarket.cfg.')
-    parser.add_option('--fast',
+    parser.add_option('--recoversync',
                       action='store_true',
-                      dest='fastsync',
+                      dest='recoversync',
                       default=False,
-                      help=('choose to do fast wallet sync, only for Core and '
-                            'only for previously synced wallet'))
+                      help=('choose to do detailed wallet sync, '
+                            'used for recovering on new Core instance.'))
     parser.add_option(
         '-x',
         '--max-cj-fee-abs',

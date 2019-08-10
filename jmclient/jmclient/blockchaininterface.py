@@ -21,16 +21,16 @@ from jmbase.support import get_log, jmprint
 log = get_log()
 
 
-def sync_wallet(wallet, fast=False):
+def sync_wallet(wallet, fast=True):
     """Wrapper function to choose fast syncing where it's
-    both possible and requested.
+    both possible and requested (true by default).
     """
     if fast and (
         isinstance(jm_single().bc_interface, BitcoinCoreInterface) or isinstance(
                 jm_single().bc_interface, RegtestBitcoinCoreInterface)):
         jm_single().bc_interface.sync_wallet(wallet, fast=True)
     else:
-        jm_single().bc_interface.sync_wallet(wallet)
+        jm_single().bc_interface.sync_wallet(wallet, fast=False)
 
 class BlockchainInterface(object):
     __metaclass__ = abc.ABCMeta
@@ -405,9 +405,8 @@ class BitcoinCoreInterface(BlockchainInterface):
                 jmprint(restart_msg, "important")
                 sys.exit(0)
 
-    def sync_wallet(self, wallet, fast=False, restart_cb=None):
-        #trigger fast sync if the index_cache is available
-        #(and not specifically disabled).
+    def sync_wallet(self, wallet, fast=True, restart_cb=None):
+        # choose fast sync (now the default) if triggered.
         if fast:
             self.sync_wallet_fast(wallet)
             self.fast_sync_called = True
@@ -499,7 +498,7 @@ class BitcoinCoreInterface(BlockchainInterface):
         else:
             self._rewind_wallet_indices(wallet, saved_indices, saved_indices)
             raise Exception("Failed to sync in fast mode after 20 batches; "
-                            "please re-try wallet sync without --fast flag.")
+                            "please re-try wallet sync with --recoversync flag.")
 
         # creating used_indices on-the-fly would be more efficient, but the
         # overall performance gain is probably negligible
@@ -518,7 +517,6 @@ class BitcoinCoreInterface(BlockchainInterface):
         log.debug("requesting detailed wallet history")
 
         wallet_name = self.get_wallet_name(wallet)
-
         addresses, saved_indices = self._collect_addresses_init(wallet)
         try:
             imported_addresses = set(self.rpc('getaddressesbyaccount',
@@ -680,7 +678,7 @@ class BitcoinCoreInterface(BlockchainInterface):
             self._add_unspent_utxo(wallet, u)
         et = time.time()
         log.debug('bitcoind sync_unspent took ' + str((et - st)) + 'sec')
-        self.wallet_synced = True
+        #self.wallet_synced = True
 
     @staticmethod
     def _add_unspent_utxo(wallet, utxo):

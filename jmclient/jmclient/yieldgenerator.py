@@ -183,12 +183,12 @@ def ygmain(ygclass, txfee=1000, cjfee_a=200, cjfee_r=0.002, ordertype='swreloffe
     parser.add_option('-g', '--gap-limit', action='store', type="int",
                       dest='gaplimit', default=gaplimit,
                       help='gap limit for wallet, default='+str(gaplimit))
-    parser.add_option('--fast',
+    parser.add_option('--recoversync',
                       action='store_true',
-                      dest='fastsync',
+                      dest='recoversync',
                       default=False,
-                      help=('choose to do fast wallet sync, only for Core and '
-                            'only for previously synced wallet'))
+                      help=('choose to do detailed wallet sync, '
+                            'used for recovering on new Core instance.'))
     parser.add_option('-m', '--mixdepth', action='store', type='int',
                       dest='mixdepth', default=None,
                       help="highest mixdepth to use")
@@ -229,7 +229,7 @@ def ygmain(ygclass, txfee=1000, cjfee_a=200, cjfee_r=0.002, ordertype='swreloffe
         jm_single().bc_interface.synctype = "with-script"
 
     while not jm_single().bc_interface.wallet_synced:
-        sync_wallet(wallet, fast=options.fastsync)
+        sync_wallet(wallet, fast=not options.recoversync)
     """
 
     maker = ygclass(ws, [options.txfee, cjfee_a, cjfee_r,

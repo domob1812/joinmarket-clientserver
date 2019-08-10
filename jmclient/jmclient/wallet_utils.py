@@ -77,12 +77,12 @@ def get_wallettool_parser():
                       default=1,
                       help=('History method verbosity, 0 (least) to 6 (most), '
                             '<=2 batches earnings, even values also list TXIDs'))
-    parser.add_option('--fast',
+    parser.add_option('--recoversync',
                       action='store_true',
-                      dest='fastsync',
+                      dest='recoversync',
                       default=False,
-                      help=('choose to do fast wallet sync, only for Core and '
-                      'only for previously synced wallet'))
+                      help=('choose to do detailed wallet sync, '
+                            'used for recovering on new Core instance.'))
     parser.add_option('-H',
                       '--hd',
                       action='store',
@@ -1187,7 +1187,7 @@ def wallet_tool_main(wallet_root_path):
             if 'listunspent_args' not in jm_single().config.options('POLICY'):
                 jm_single().config.set('POLICY','listunspent_args', '[0]')
             while not jm_single().bc_interface.wallet_synced:
-                sync_wallet(wallet, fast=options.fastsync)
+                sync_wallet(wallet, fast=not options.recoversync)
     #Now the wallet/data is prepared, execute the script according to the method
     if method == "display":
         return wallet_display(wallet, options.gaplimit, options.showprivkey)

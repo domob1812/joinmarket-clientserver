@@ -57,8 +57,15 @@ def test_sequentially_used_wallet_sync(setup_wallets, fast, internal):
     assert not broken
 
 
-@pytest.mark.parametrize('fast', (False, True))
+@pytest.mark.parametrize('fast', (False,))
 def test_gap_used_wallet_sync(setup_wallets, fast):
+    """ After careful examination this test now only includes the Recovery sync.
+    Note: pre-Aug 2019, because of a bug, this code was not in fact testing both
+    Fast and Recovery sync, but only Recovery (twice). Also, the scenario set
+    out in this test (where coins are funded to a wallet which has no index-cache,
+    and initially no imports) is only appropriate for recovery-mode sync, not for
+    fast-mode (the now default).
+    """
     used_count = [1, 3, 6, 2, 23]
     wallet = create_wallet_for_sync(used_count, ['test_gap_used_wallet_sync'])
     wallet.gap_limit = 20
@@ -78,7 +85,6 @@ def test_gap_used_wallet_sync(setup_wallets, fast):
     for md in range(wallet.max_mixdepth + 1):
         wallet.set_next_index(md, True, 0)
         wallet.set_next_index(md, False, 0)
-
     sync_test_wallet(fast, wallet)
 
     broken = True
@@ -89,8 +95,11 @@ def test_gap_used_wallet_sync(setup_wallets, fast):
     assert not broken
 
 
-@pytest.mark.parametrize('fast', (False, True))
-def test_multigap_used_wallet_sync(setup_wallets, fast):
+@pytest.mark.parametrize('fast', (False,))
+def test_gap_used_wallet_sync(setup_wallets, fast):
+    """ See docstring for test_gap_used_wallet_sync; exactly the
+    same applies here.
+    """
     start_index = 5
     used_count = [start_index, 0, 0, 0, 0]
     wallet = create_wallet_for_sync(used_count, ['test_multigap_used_wallet_sync'])
