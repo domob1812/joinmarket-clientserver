@@ -210,7 +210,7 @@ def check_regtest(blockchain_start=True):
         #to allow testing of confirm/unconfirm callback for multiple txs
         jm_single().bc_interface.tick_forward_chain_interval = 10
         jm_single().bc_interface.simulating = True
-        jm_single().maker_timeout_sec = 15
+        jm_single().maker_timeout_sec = 30
     # handles the custom regtest hrp for bech32
     cryptoengine.BTC_P2WPKH.VBYTE = 100
 
@@ -321,6 +321,15 @@ def get_tumbler_parser():
             'Average the number of minutes to wait between transactions. Randomly chosen '
             ' following an exponential distribution, which describes the time between uncorrelated'
             ' events. default=30')
+    parser.add_option(
+            '--stage1-timelambda-increase',
+            type='float',
+            dest='stage1_timelambda_increase',
+            default=3,
+            help=
+            'Stage 1 sweep coinjoins have a longer wait time. This parameter'
+            ' controls by what factor longer is this average wait time compared to stage2 coinjoins'
+            ' which are controlled by `--timelambda`, default=3')
     parser.add_option(
             '-w',
             '--wait-time',

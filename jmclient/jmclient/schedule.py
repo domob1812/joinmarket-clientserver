@@ -75,7 +75,7 @@ def get_amount_fractions(power, count):
             break
     return y
 
-def get_tumble_schedule(options, destaddrs):
+def get_tumble_schedule(options, destaddrs, mixdepth_balance_dict):
     """for the general intent and design of the tumbler algo, see the docs in
     joinmarket-org/joinmarket.
     Alterations:
@@ -97,6 +97,28 @@ def get_tumble_schedule(options, destaddrs):
                                options['txcountparams'][1], options['mixdepthcount'])
     txcounts = lower_bounded_int(txcounts, options['mintxcount'])
     tx_list = []
+    ### stage 1 coinjoins, which sweep the entire mixdepth without creating change
+    highest_initial_filled_mixdepth = 0
+    for mixdepth, balance in mixdepth_balance_dict.items():
+        if balance > 0:
+            highest_initial_filled_mixdepth = mixdepth
+    stage1_tx_count = highest_initial_filled_mixdepth + 1
+    waits = rand_exp_array(options['timelambda']*options['stage1_timelambda_increase'],
+                           stage1_tx_count)
+    makercounts = rand_norm_array(options['makercountrange'][0],
+                                  options['makercountrange'][1],
+                                  stage1_tx_count)
+    makercounts = lower_bounded_int(makercounts, options['minmakercount'])
+    for m, (wait, makercount) in enumerate(zip(waits, makercounts)):
+        tx = {'amount_fraction': 0,
+              'wait': round(wait, 2),
+              'srcmixdepth': highest_initial_filled_mixdepth - m - options['mixdepthsrc'],
+              'makercount': makercount,
+              'destination': 'INTERNAL'
+        }
+        tx_list.append(tx)
+
+    ### stage 2 coinjoins, which create a number of random-amount coinjoins from each mixdepth
     for m, txcount in enumerate(txcounts):
         if options['mixdepthcount'] - options['addrcount'] <= m and m < \
                 options['mixdepthcount'] - 1:
@@ -117,7 +139,7 @@ def get_tumble_schedule(options, destaddrs):
                                                      makercounts):
             tx = {'amount_fraction': amount_fraction,
                   'wait': round(wait, 2),
-                  'srcmixdepth': m + options['mixdepthsrc'],
+                  'srcmixdepth': highest_initial_filled_mixdepth + m + options['mixdepthsrc'] + 1,
                   'makercount': makercount,
                   'destination': 'INTERNAL'}
             tx_list.append(tx)
@@ -127,8 +149,8 @@ def get_tumble_schedule(options, destaddrs):
     addrask = options['addrcount'] - len(destaddrs)
     external_dest_addrs = ['addrask'] * addrask + destaddrs
     for mix_offset in range(options['addrcount']):
-        srcmix = (options['mixdepthsrc'] + options['mixdepthcount'] -
-            mix_offset - 1)
+        srcmix = (highest_initial_filled_mixdepth + options['mixdepthsrc']
+            + options['mixdepthcount'] - mix_offset)
         for tx in reversed(tx_list):
             if tx['srcmixdepth'] == srcmix:
                 tx['destination'] = external_dest_addrs[mix_offset]
