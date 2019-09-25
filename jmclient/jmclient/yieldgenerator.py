@@ -108,13 +108,11 @@ class YieldGeneratorBasic(YieldGenerator):
         jlog.info('filling offer, mixdepth=' + str(mixdepth) + ', amount=' + str(amount))
 
         # mixdepth is the chosen depth we'll be spending from
-        cj_addr = self.ws.wallet.get_internal_addr(
-            (mixdepth + 1) % (self.ws.wallet.mixdepth + 1),
-            jm_single().bc_interface)
-        change_addr = self.ws.wallet.get_internal_addr(mixdepth,
-                                                    jm_single().bc_interface)
+        cj_addr = self.ws.get_internal_addr(
+            (mixdepth + 1) % (self.ws.wallet.mixdepth + 1))
+        change_addr = self.ws.get_internal_addr(mixdepth)
 
-        utxos = self.ws.wallet.select_utxos(mixdepth, total_amount)
+        utxos = self.ws.select_utxos(mixdepth, total_amount)
         my_total_in = sum([va['value'] for va in utxos.values()])
         real_cjfee = calc_cj_fee(offer["ordertype"], offer["cjfee"], amount)
         change_value = my_total_in - amount - offer["txfee"] + real_cjfee

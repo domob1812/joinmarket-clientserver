@@ -27,6 +27,7 @@ from .cryptoengine import TYPE_P2PKH, TYPE_P2SH_P2WPKH,\
 from .support import get_random_bytes
 from . import mn_encode, mn_decode
 import jmbitcoin as btc
+from jmbase import JM_WALLET_NAME_PREFIX
 
 jlog = get_log()
 
@@ -68,19 +69,6 @@ class Mnemonic(MnemonicParent):
     @classmethod
     def detect_language(cls, code):
         return "english"
-
-def make_shuffled_tx(ins, outs, deser=True, version=1, locktime=0):
-    """ Simple utility to ensure transaction
-    inputs and outputs are randomly ordered.
-    Can possibly be replaced by BIP69 in future
-    """
-    random.shuffle(ins)
-    random.shuffle(outs)
-    tx = btc.mktx(ins, outs, version=version, locktime=locktime)
-    if deser:
-        return btc.deserialize(tx)
-    else:
-        return tx
 
 def estimate_tx_fee(ins, outs, txtype='p2pkh'):
     '''Returns an estimate of the number of satoshis required
@@ -428,40 +416,25 @@ class BaseWallet(object):
         privkey = self._get_priv_from_path(path)[0]
         return hexlify(privkey).decode('ascii')
 
-    def _get_addr_int_ext(self, internal, mixdepth, bci=None):
+    def _get_addr_int_ext(self, internal, mixdepth):
         script = self.get_internal_script(mixdepth) if internal else \
             self.get_external_script(mixdepth)
-        addr = self.script_to_addr(script)
-        if bci is not None and hasattr(bci, 'import_addresses'):
-            assert hasattr(bci, 'get_wallet_name')
-            # we aggressively import ahead of our index, so that when
-            # detailed sync is needed in future, it will not find
-            # imports missing (and this operation costs nothing).
-            addrs_to_import = list(bci._collect_addresses_gap(
-                self, self.gaplimit))
-            bci.import_addresses(addrs_to_import, bci.get_wallet_name(self))
-        return addr
+        return self.script_to_addr(script)
 
-    def get_external_addr(self, mixdepth, bci=None):
+    def get_external_addr(self, mixdepth):
         """
         Return an address suitable for external distribution, including funding
         the wallet from other sources, or receiving payments or donations.
         JoinMarket will never generate these addresses for internal use.
-        If the argument bci is non-null, we attempt to import the new
-        address into this blockchaininterface instance
-        (based on Bitcoin Core's model).
         """
-        return self._get_addr_int_ext(False, mixdepth, bci=bci)
+        return self._get_addr_int_ext(False, mixdepth)
 
-    def get_internal_addr(self, mixdepth, bci=None):
+    def get_internal_addr(self, mixdepth):
         """
         Return an address for internal usage, as change addresses and when
         participating in transactions initiated by other parties.
-        If the argument bci is non-null, we attempt to import the new
-        address into this blockchaininterface instance
-        (based on Bitcoin Core's model).
         """
-        return self._get_addr_int_ext(True, mixdepth, bci=bci)
+        return self._get_addr_int_ext(True, mixdepth)
 
     def get_external_script(self, mixdepth):
         return self.get_new_script(mixdepth, False)
@@ -518,13 +491,6 @@ class BaseWallet(object):
 
     def get_addr_path(self, path):
         script = self.get_script_path(path)
-        return self.script_to_addr(script)
-
-    def get_new_addr(self, mixdepth, internal):
-        """
-        use get_external_addr/get_internal_addr
-        """
-        script = self.get_new_script(mixdepth, internal)
         return self.script_to_addr(script)
 
     def get_new_script(self, mixdepth, internal):
@@ -864,6 +830,12 @@ class BaseWallet(object):
         priv, engine = self._get_priv_from_path(path)
         return engine.sign_message(priv, message)
 
+    def get_wallet_name(self):
+        """ Returns the name used as a label for this
+        specific Joinmarket wallet in Bitcoin Core.
+        """
+        return JM_WALLET_NAME_PREFIX + self.get_wallet_id()
+
     def get_wallet_id(self):
         """
         Get a human-readable identifier for the wallet.
@@ -948,6 +920,91 @@ class BaseWallet(object):
         Warning: improper use of 'force' will cause undefined behavior!
         """
         raise NotImplementedError()
+
+    def rewind_wallet_indices(self, used_indices, saved_indices):
+        for md in used_indices:
+            for int_type in (0, 1):
+                index = max(used_indices[md][int_type],
+                            saved_indices[md][int_type])
+                self.set_next_index(md, int_type, index, force=True)
+
+    def get_used_indices(self, addr_gen):
+        """ Returns a dict of max used indices for each branch in
+        the wallet, from the given addresses addr_gen, assuming
+        that they are known to the wallet.
+        """
+
+        indices = {x: [0, 0] for x in range(self.max_mixdepth + 1)}
+
+        for addr in addr_gen:
+            if not self.is_known_addr(addr):
+                continue
+            md, internal, index = self.get_details(
+                self.addr_to_path(addr))
+            if internal not in (0, 1):
+                assert internal == 'imported'
+                continue
+            indices[md][internal] = max(indices[md][internal], index + 1)
+
+        return indices
+
+    def check_gap_indices(self, used_indices):
+        """ Return False if any of the provided indices (which should be
+        those seen from listtransactions as having been used, for
+        this wallet/label) are higher than the ones recorded in the index
+        cache."""
+
+        for md in used_indices:
+            for internal in (0, 1):
+                if used_indices[md][internal] >\
+                   max(self.get_next_unused_index(md, internal), 0):
+                    return False
+        return True
+
+    def collect_addresses_init(self):
+        """ Collects the "current" set of addresses,
+        as defined by the indices recorded in the wallet's
+        index cache (persisted in the wallet file usually).
+        Note that it collects up to the current indices plus
+        the gap limit.
+        """
+        addresses = set()
+        saved_indices = dict()
+
+        for md in range(self.max_mixdepth + 1):
+            saved_indices[md] = [0, 0]
+            for internal in (0, 1):
+                next_unused = self.get_next_unused_index(md, internal)
+                for index in range(next_unused):
+                    addresses.add(self.get_addr(md, internal, index))
+                for index in range(self.gap_limit):
+                    add_fn = self.get_internal_addr if internal else \
+                        self.get_external_addr
+                    addresses.add(add_fn(md))
+                # reset the indices to the value we had before the
+                # new address calls:
+                self.set_next_index(md, internal, next_unused)
+                saved_indices[md][internal] = next_unused
+            # include any imported addresses
+            for path in self.yield_imported_paths(md):
+                addresses.add(self.get_addr_path(path))
+
+        return addresses, saved_indices
+
+    def collect_addresses_gap(self, gap_limit=None):
+        gap_limit = gap_limit or self.gap_limit
+        addresses = set()
+
+        for md in range(self.max_mixdepth + 1):
+            for internal in (True, False):
+                old_next = self.get_next_unused_index(md, internal)
+                for index in range(gap_limit):
+                    add_fn = self.get_internal_addr if internal else \
+                        self.get_external_addr
+                    addresses.add(add_fn(md))
+                self.set_next_index(md, internal, old_next)
+
+        return addresses
 
     def close(self):
         self._storage.close()

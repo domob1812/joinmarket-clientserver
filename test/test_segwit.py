@@ -116,8 +116,7 @@ def test_spend_p2sh_p2wpkh_multi(setup_segwit, wallet_structure, in_amt, amount,
     # import new addresses to bitcoind
     jm_single().bc_interface.import_addresses(
         [nsw_wallet.script_to_addr(x)
-         for x in [cj_script, change_script]],
-        jm_single().bc_interface.get_wallet_name(nsw_wallet))
+         for x in [cj_script, change_script]], nsw_wallet.get_wallet_name())
 
     # sign tx
     scripts = {}

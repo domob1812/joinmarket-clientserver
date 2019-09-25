@@ -13,7 +13,8 @@ from binascii import unhexlify
 
 from jmbitcoin import SerializationError, SerializationTruncationError
 import jmbitcoin as btc
-from jmclient.wallet import estimate_tx_fee, make_shuffled_tx
+from jmclient.wallet import estimate_tx_fee
+from jmclient.wallet_service import WalletService
 from jmclient.configure import jm_single
 from jmbase.support import get_log
 from jmclient.support import calc_cj_fee, select_one_utxo
@@ -26,6 +27,7 @@ jlog = get_log()
 class Maker(object):
     def __init__(self, wallet_service):
         self.active_orders = {}
+        assert isinstance(wallet_service, WalletService)
         self.ws = wallet_service
         self.nextoid = -1
         self.offerlist = None
@@ -89,7 +91,7 @@ class Maker(object):
             return reject(reason)
 
         try:
-            if not self.ws.wallet.pubkey_has_script(
+            if not self.ws.pubkey_has_script(
                     unhexlify(cr_dict['P']), unhexlify(res[0]['script'])):
                 raise EngineError()
         except EngineError:
@@ -103,13 +105,13 @@ class Maker(object):
             #could not find funds
             return (False,)
         # for index update persistence:
-        self.ws.wallet.save()
+        self.ws.save_wallet()
         # Construct data for auth request back to taker.
         # Need to choose an input utxo pubkey to sign with
         # (no longer using the coinjoin pubkey from 0.2.0)
         # Just choose the first utxo in self.utxos and retrieve key from wallet.
         auth_address = utxos[list(utxos.keys())[0]]['address']
-        auth_key = self.ws.wallet.get_key_from_addr(auth_address)
+        auth_key = self.ws.get_key_from_addr(auth_address)
         auth_pub = btc.privtopub(auth_key)
         btc_sig = btc.ecdsa_sign(kphex, auth_key)
         return (True, utxos, auth_pub, cj_addr, change_addr, btc_sig)
@@ -138,11 +140,11 @@ class Maker(object):
             utxo = ins['outpoint']['hash'] + ':' + str(ins['outpoint']['index'])
             if utxo not in utxos:
                 continue
-            script = self.ws.wallet.addr_to_script(utxos[utxo]['address'])
+            script = self.ws.addr_to_script(utxos[utxo]['address'])
             amount = utxos[utxo]['value']
             our_inputs[index] = (script, amount)
 
-        txs = self.ws.wallet.sign_tx(btc.deserialize(unhexlify(txhex)), our_inputs)
+        txs = self.ws.sign_tx(btc.deserialize(unhexlify(txhex)), our_inputs)
         for index in our_inputs:
             sigmsg = unhexlify(txs['ins'][index]['script'])
             if 'txinwitness' in txs['ins'][index]:
@@ -293,15 +295,16 @@ class P2EPMaker(Maker):
     and partially signed transaction, thus information leak to snoopers
     is not possible.
     """
-    def __init__(self, wallet, mixdepth, amount):
+    def __init__(self, wallet_service, mixdepth, amount):
+        super(P2EPMaker, self).__init__(wallet_service)
         self.receiving_amount = amount
         self.mixdepth = mixdepth
         # destination mixdepth must be different from that
         # which we source coins from; use the standard "next"
-        dest_mixdepth = (self.mixdepth + 1) % wallet.max_mixdepth
+        dest_mixdepth = (self.mixdepth + 1) % self.ws.wallet.max_mixdepth
         # Select an unused destination in the external branch
-        self.destination_addr = wallet.get_new_addr(dest_mixdepth, 0)
-        super(P2EPMaker, self).__init__(wallet)
+        self.destination_addr = self.ws.wallet.get_new_addr(
+            dest_mixdepth, 0)
         # Callback to request user permission (for e.g. GUI)
         # args: (1) message, as string
         # returns: True or False
@@ -462,7 +465,7 @@ class P2EPMaker(Maker):
         self.user_info("Network transaction fee of fallback tx is: " + str(
             btc_fee) + " satoshis.")
         fee_est = estimate_tx_fee(len(tx['ins']), len(tx['outs']),
-                                  txtype=self.wallet.get_txtype())
+                                  txtype=self.ws.wallet.get_txtype())
         fee_ok = False
         if btc_fee > 0.3 * fee_est and btc_fee < 3 * fee_est:
             fee_ok = True
@@ -547,7 +550,7 @@ class P2EPMaker(Maker):
             # sweeping dust ...
             self.user_info("Choosing one coin at random")
             try:
-                my_utxos = self.wallet.select_utxos(
+                my_utxos = self.ws.wallet.select_utxos(
                     self.mixdepth,  jm_single().DUST_THRESHOLD,
                     select_fn=select_one_utxo)
             except:
@@ -557,15 +560,15 @@ class P2EPMaker(Maker):
             # get an approximate required amount assuming 4 inputs, which is
             # fairly conservative (but guess by necessity).
             fee_for_select = estimate_tx_fee(len(tx['ins']) + 4, 2,
-                                             txtype=self.wallet.get_txtype())
+                                             txtype=self.ws.wallet.get_txtype())
             approx_sum = max_sender_amt - self.receiving_amount + fee_for_select
             try:
-                my_utxos = self.wallet.select_utxos(self.mixdepth, approx_sum)
+                my_utxos = self.ws.wallet.select_utxos(self.mixdepth, approx_sum)
                 not_uih2 = True
             except Exception:
                 # TODO probably not logical to always sweep here.
                 self.user_info("Sweeping all coins in this mixdepth.")
-                my_utxos = self.wallet.get_utxos_by_mixdepth()[self.mixdepth]
+                my_utxos = self.ws.wallet.get_utxos_by_mixdepth()[self.mixdepth]
                 if my_utxos == {}:
                     return self.no_coins_fallback()
         if not_uih2:
@@ -583,7 +586,7 @@ class P2EPMaker(Maker):
         new_destination_amount = self.receiving_amount + my_total_in
         # estimate the required fee for the new version of the transaction
         total_ins = len(tx["ins"]) + len(my_utxos.keys())
-        est_fee = estimate_tx_fee(total_ins, 2, txtype=self.wallet.get_txtype())
+        est_fee = estimate_tx_fee(total_ins, 2, txtype=self.ws.wallet.get_txtype())
         self.user_info("We estimated a fee of: " + str(est_fee))
         new_change_amount = total_sender_input + my_total_in - \
             new_destination_amount - est_fee
@@ -602,7 +605,7 @@ class P2EPMaker(Maker):
         # this call should never fail so no catch here.
         currentblock = jm_single().bc_interface.rpc(
             "getblockchaininfo", [])["blocks"]
-        new_tx = make_shuffled_tx(new_ins, new_outs, False, 2, currentblock)
+        new_tx = btc.make_shuffled_tx(new_ins, new_outs, False, 2, currentblock)
         new_tx_deser = btc.deserialize(new_tx)
 
         # sign our inputs before transfer
@@ -611,16 +614,12 @@ class P2EPMaker(Maker):
             utxo = ins['outpoint']['hash'] + ':' + str(ins['outpoint']['index'])
             if utxo not in my_utxos:
                 continue
-            script = self.wallet.addr_to_script(my_utxos[utxo]['address'])
+            script = self.ws.wallet.addr_to_script(my_utxos[utxo]['address'])
             amount = my_utxos[utxo]['value']
             our_inputs[index] = (script, amount)
 
-        txs = self.wallet.sign_tx(btc.deserialize(new_tx), our_inputs)
-        jm_single().bc_interface.add_tx_notify(txs,
-            self.on_tx_unconfirmed, self.on_tx_confirmed,
-            self.destination_addr,
-            wallet_name=jm_single().bc_interface.get_wallet_name(self.ws.wallet),
-            txid_flag=False, vb=self.wallet._ENGINE.VBYTE)
+        txs = self.ws.wallet.sign_tx(btc.deserialize(new_tx), our_inputs)
+        self.ws.register_
         # The blockchain interface just abandons monitoring if the transaction
         # is not broadcast before the configured timeout; we want to take
         # action in this case, so we add an additional callback to the reactor:

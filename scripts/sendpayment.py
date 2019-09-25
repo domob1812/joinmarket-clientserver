@@ -11,12 +11,12 @@ of "schedules" with the -S flag.
 """
 
 import sys
-from twisted.internet import reactor
+from twisted.internet import reactor, task
 import pprint
 
 from jmclient import Taker, P2EPTaker, load_program_config, get_schedule,\
     JMClientProtocolFactory, start_reactor, validate_address, jm_single,\
-    sync_wallet, estimate_tx_fee, direct_send,\
+    sync_wallet, estimate_tx_fee, direct_send, WalletService,\
     open_test_wallet_maybe, get_wallet_path
 from twisted.python.log import startLogging
 from jmbase.support import get_log, set_logging_level, jmprint
@@ -128,15 +128,22 @@ def main():
     wallet_path = get_wallet_path(wallet_name, None)
     wallet = open_test_wallet_maybe(
         wallet_path, wallet_name, max_mix_depth, gap_limit=options.gaplimit)
+    ws = WalletService(wallet)
+    ws.startService()
 
-    if jm_single().config.get("BLOCKCHAIN",
-        "blockchain_source") == "electrum-server" and options.makercount != 0:
-        jm_single().bc_interface.synctype = "with-script"
-    #wallet sync will now only occur on reactor start if we're joining.
-    while not jm_single().bc_interface.wallet_synced:
-        sync_wallet(wallet, fast=not options.recoversync)
     if options.makercount == 0 and not options.p2ep:
-        direct_send(wallet, amount, mixdepth, destaddr, options.answeryes)
+        # we run a direct send as a single synchronous operation,
+        # then quit, but must wait for wallet sync before starting.
+        def wait_to_send():
+            if not ws.synced:
+                return
+            wl.stop()
+            direct_send(ws, amount, mixdepth, destaddr,
+                        options.answeryes)
+            reactor.stop()
+        wl = task.LoopingCall(wait_to_send)
+        wl.start(2.0, now=False)
+        reactor.run()
         return
 
     if wallet.get_txtype() == 'p2pkh':
@@ -174,8 +181,6 @@ def main():
         if fromtx:
             if res:
                 txd, txid = txdetails
-                taker.wallet.remove_old_utxos(txd)
-                taker.wallet.add_new_utxos(txd, txid)
                 reactor.callLater(waittime*60,
                                   clientfactory.getClient().clientStart)
             else:
@@ -240,10 +245,10 @@ def main():
                                       txdetails=None):
             log.error("PayJoin payment was NOT made, timed out.")
             reactor.stop()
-        taker = P2EPTaker(options.p2ep, wallet, schedule,
+        taker = P2EPTaker(options.p2ep, ws, schedule,
                           callbacks=(None, None, p2ep_on_finished_callback))
     else:
-        taker = Taker(wallet,
+        taker = Taker(ws,
                       schedule,
                       order_chooser=chooseOrdersFunc,
                       max_cj_fee=maxcjfee,

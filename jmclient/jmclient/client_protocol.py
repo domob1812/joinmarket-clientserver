@@ -263,8 +263,10 @@ class JMMakerClientProtocol(JMClientProtocol):
             self.finalized_offers[nick] = offer
             tx = btc.deserialize(txhex)
             self.finalized_offers[nick]["txd"] = tx
-            self.client.ws.register_callbacks([self.unconfirm_callback], True)
-            self.client.ws.register_callbacks([self.confirm_callback], False)
+            self.client.ws.register_callbacks([self.unconfirm_callback],
+                                              "unconfirmed")
+            self.client.ws.register_callbacks([self.confirm_callback],
+                                              "confirmed")
             d = self.callRemote(commands.JMTXSigs,
                                 nick=nick,
                                 sigs=json.dumps(sigs))
@@ -291,7 +293,7 @@ class JMMakerClientProtocol(JMClientProtocol):
         self.defaultCallbacks(d)
         return True
 
-    def confirm_callback(self, txd, txid):
+    def confirm_callback(self, txd, txid, confirms):
         #find the offer for this tx
         offerinfo = None
         for k,v in iteritems(self.finalized_offers):
@@ -301,7 +303,8 @@ class JMMakerClientProtocol(JMClientProtocol):
                 break
         if offerinfo is None:
             return False
-        jlog.info('tx in a block: ' + txid)
+        jlog.info('tx in a block: ' + txid + ' with ' + str(
+            confirms) + ' confirmations.')
         to_cancel, to_announce = self.client.on_tx_confirmed(offerinfo,
                                                      txid)
         self.client.modify_orders(to_cancel, to_announce)

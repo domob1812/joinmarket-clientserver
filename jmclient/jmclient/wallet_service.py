@@ -46,6 +46,65 @@ class WalletService(Service):
         # i.e. they are not new but we want to track:
         self.active_txids = []
 
+    """ The following functions are pure pass through but
+    are replicated here from the underlying wallet to
+    preserve encapsulation.
+    """
+
+    def get_txtype(self):
+        return self.wallet.get_txtype()
+
+    def get_utxos_by_mixdepth(self):
+        return self.wallet.get_utxos_by_mixdepth()
+
+    def select_utxos(self, mixdepth, amount):
+        return self.wallet.select_utxos(mixdepth, amount)
+
+    def get_internal_addr(self, mixdepth):
+        if self.bci is not None and hasattr(self.bci, 'import_addresses'):
+            # we aggressively import ahead of our index, so that when
+            # detailed sync is needed in future, it will not find
+            # imports missing (and this operation costs nothing).
+            addrs_to_import = list(self.wallet.collect_addresses_gap())
+            self.bci.import_addresses(addrs_to_import,
+                                      self.wallet.get_wallet_name())
+        return self.wallet.get_internal_addr(mixdepth)
+
+    def get_external_addr(self, mixdepth):
+        if self.bci is not None and hasattr(self.bci, 'import_addresses'):
+            # we aggressively import ahead of our index, so that when
+            # detailed sync is needed in future, it will not find
+            # imports missing (and this operation costs nothing).
+            addrs_to_import = list(self.wallet.collect_addresses_gap())
+            self.bci.import_addresses(addrs_to_import,
+                                      self.wallet.get_wallet_name())
+        return self.wallet.get_external_addr(mixdepth)
+
+    def get_new_addr(self, mixdepth, internal):
+        """ A wrapper around get_internal_addr/
+        get_external_addr, only used externally.
+        """
+        if internal:
+            return self.get_internal_addr(mixdepth)
+        else:
+            return self.get_external_addr(mixdepth)
+
+    def save_wallet(self):
+        self.wallet.save()
+
+    def get_key_from_addr(self, address):
+        return self.wallet.get_key_from_addr(address)
+
+    def pubkey_has_script(self, pubkey, script):
+        return self.wallet.pubkey_has_script(pubkey, script)
+
+    def addr_to_script(self, address):
+        return self.wallet.addr_to_script(address)
+
+    def sign_tx(self, tx, scripts, **kwargs):
+        return self.wallet.sign_tx(tx, scripts, **kwargs)
+
+
     def startService(self):
         """ Encapsulates start up actions.
         Here wallet sync.
@@ -84,21 +143,36 @@ class WalletService(Service):
         self.old_txs = self.bci.list_transactions(100)
         return self.synced
 
-    def register_callbacks(self, callbacks, unconfirmed=True):
+    def register_callbacks(self, callbacks, cb_type="all"):
         """ Register callbacks that will be called by the
         transaction monitor loop, assuming new transactions that
         appear do affect the wallet at all.
         Callback arguments are currently (txd, txid) and return
-        is boolean.
+        is boolean, except "confirmed" callbacks which have
+        arguments (txd, txid, confirmations).
         Note that callbacks MUST correctly return True if they
         recognized the transaction and processed it, and False
         if not. The True return value will be used to remove
         the callback from the list.
+        Arguments:
+        `callbacks` - a list of functions with signature (txd, txid)
+        and return type boolean. All will be assigned the same type.
+        `cb_type` - must be one of "all", "unconfirmed", "confirmed";
+        the first type will be called back once for every new
+        transaction, the second only once when the number of
+        confirmations is 0, and the third only once when the number
+        of confirmations is > 0.
         """
-        if unconfirmed:
+        if cb_type == "all":
+            self.all_callbacks.extend(callbacks)
+
+        elif cb_type == "unconfirmed":
             self.unconfirmed_callbacks.extend(callbacks)
-        else:
+        elif cb_type == "confirmed":
             self.confirmed_callbacks.extend(callbacks)
+        else:
+            assert False, "Invalid argument: " + cb_type
+
 
     def start_wallet_monitoring(self, syncresult):
         """ Once the initialization of the service
@@ -125,6 +199,9 @@ class WalletService(Service):
         txlist = self.bci.list_transactions(100)
         new_txs = []
         for x in txlist:
+            # process either (a) a completely new tx or
+            # (b) a tx that reached unconf status but we are still
+            # waiting for conf (active_txids)
             if x['txid'] in self.active_txids or x['txid'] not in self.old_txs:
                 new_txs.append(x)
         # reset for next polling event:
@@ -133,7 +210,7 @@ class WalletService(Service):
         for tx in new_txs:
             # filter on this Joinmarket wallet:
             if "label" not in tx.keys() or \
-               tx["label"] != self.bci.get_wallet_name(self.wallet):
+               tx["label"] != self.wallet.get_wallet_name():
                 continue
             res = self.bci.get_transaction(tx["txid"])
             if not res:
@@ -169,7 +246,7 @@ class WalletService(Service):
                             self.active_txids.append(txid)
                 else:
                     for f in self.confirmed_callbacks:
-                        if f(txd, txid):
+                        if f(txd, txid, confs):
                             self.confirmed_callbacks.remove(f)
                             if txid in self.active_txids:
                                 self.active_txids.remove(txid)

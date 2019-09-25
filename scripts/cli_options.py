@@ -358,6 +358,18 @@ def get_tumbler_parser():
             default=9,
             help=
             'maximum amount of times to re-create a transaction before giving up, default 9')
+    # note that this is used slightly differently in tumbler from sendpayment,
+    # hence duplicated:
+    parser.add_option('-A',
+            '--amtmixdepths',
+            action='store',
+            type='int',
+            dest='amtmixdepths',
+            help='number of mixdepths ever used in wallet, '
+                 'only to be used if mixdepths higher than '
+                 'mixdepthsrc + number of mixdepths to tumble '
+                 'have been used.',
+            default=-1)
     add_common_options(parser)
     return parser
 

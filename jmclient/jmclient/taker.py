@@ -16,8 +16,9 @@ from jmclient.configure import get_p2sh_vbyte, jm_single, validate_address
 from jmbase.support import get_log
 from jmclient.support import (calc_cj_fee, weighted_order_choose, choose_orders,
                               choose_sweep_orders)
-from jmclient.wallet import estimate_tx_fee, make_shuffled_tx
+from jmclient.wallet import estimate_tx_fee
 from jmclient.podle import generate_podle, get_podle_commitments, PoDLE
+from jmclient.wallet_service import WalletService
 from .output import generate_podle_error_string
 from .cryptoengine import EngineError
 
@@ -31,7 +32,7 @@ class JMTakerError(Exception):
 class Taker(object):
 
     def __init__(self,
-                 wallet,
+                 wallet_service,
                  schedule,
                  order_chooser=weighted_order_choose,
                  callbacks=None,
@@ -80,7 +81,8 @@ class Taker(object):
         None
         """
         self.aborted = False
-        self.wallet = wallet
+        assert isinstance(wallet_service, WalletService)
+        self.ws = wallet_service
         self.schedule = schedule
         self.order_chooser = order_chooser
         self.max_cj_fee = max_cj_fee
@@ -173,7 +175,7 @@ class Taker(object):
                 #mixdepth in tumble schedules:
                 if self.schedule_index == 0 or si[0] != self.schedule[
                     self.schedule_index - 1]:
-                    self.mixdepthbal = self.wallet.get_balance_by_mixdepth(
+                    self.mixdepthbal = self.ws.wallet.get_balance_by_mixdepth(
                         )[self.mixdepth]
                 #reset to satoshis
                 self.cjamount = int(self.cjamount * self.mixdepthbal)
@@ -187,11 +189,10 @@ class Taker(object):
             #from the next mixdepth modulo the maxmixdepth
             if self.my_cj_addr == "INTERNAL":
                 next_mixdepth = (self.mixdepth + 1) % (
-                    self.wallet.mixdepth + 1)
+                    self.ws.wallet.mixdepth + 1)
                 jlog.info("Choosing a destination from mixdepth: " + str(
                     next_mixdepth))
-                self.my_cj_addr = self.wallet.get_internal_addr(next_mixdepth,
-                                                bci=jm_single().bc_interface)
+                self.my_cj_addr = self.ws.get_internal_addr(next_mixdepth)
                 jlog.info("Chose destination address: " + self.my_cj_addr)
             self.outputs = []
             self.cjfee_total = 0
@@ -277,8 +278,7 @@ class Taker(object):
         self.my_change_addr = None
         if self.cjamount != 0:
             try:
-                self.my_change_addr = self.wallet.get_internal_addr(self.mixdepth,
-                                                    bci=jm_single().bc_interface)
+                self.my_change_addr = self.ws.get_internal_addr(self.mixdepth)
             except:
                 self.taker_info_callback("ABORT", "Failed to get a change address")
                 return False
@@ -291,7 +291,7 @@ class Taker(object):
             total_amount = self.cjamount + self.total_cj_fee + self.total_txfee
             jlog.info('total estimated amount spent = ' + str(total_amount))
             try:
-                self.input_utxos = self.wallet.select_utxos(self.mixdepth,
+                self.input_utxos = self.ws.wallet.select_utxos(self.mixdepth,
                                                             total_amount)
             except Exception as e:
                 self.taker_info_callback("ABORT",
@@ -299,7 +299,7 @@ class Taker(object):
                 return False
         else:
             #sweep
-            self.input_utxos = self.wallet.get_utxos_by_mixdepth()[self.mixdepth]
+            self.input_utxos = self.ws.wallet.get_utxos_by_mixdepth()[self.mixdepth]
             #do our best to estimate the fee based on the number of
             #our own utxos; this estimate may be significantly higher
             #than the default set in option.txfee * makercount, where
@@ -310,7 +310,7 @@ class Taker(object):
             est_outs = 2*self.n_counterparties + 1
             jlog.debug("Estimated outs: "+str(est_outs))
             estimated_fee = estimate_tx_fee(est_ins, est_outs,
-                                            txtype=self.wallet.get_txtype())
+                                            txtype=self.ws.wallet.get_txtype())
             jlog.debug("We have a fee estimate: "+str(estimated_fee))
             jlog.debug("And a requested fee of: "+str(
                 self.txfee_default * self.n_counterparties))
@@ -387,7 +387,7 @@ class Taker(object):
             auth_pub_bin = unhexlify(auth_pub)
             for inp in utxo_data:
                 try:
-                    if self.wallet.pubkey_has_script(
+                    if self.ws.wallet.pubkey_has_script(
                             auth_pub_bin, unhexlify(inp['script'])):
                         break
                 except EngineError:
@@ -454,7 +454,7 @@ class Taker(object):
             #Estimate fee per choice of next/3/6 blocks targetting.
             estimated_fee = estimate_tx_fee(
                 len(sum(self.utxos.values(), [])), len(self.outputs) + 2,
-                txtype=self.wallet.get_txtype())
+                txtype=self.ws.wallet.get_txtype())
             jlog.info("Based on initial guess: " + str(self.total_txfee) +
                      ", we estimated a miner fee of: " + str(estimated_fee))
             #reset total
@@ -495,7 +495,7 @@ class Taker(object):
                         for u in sum(self.utxos.values(), [])]
         self.outputs.append({'address': self.coinjoin_address(),
                              'value': self.cjamount})
-        tx = make_shuffled_tx(self.utxo_tx, self.outputs, False)
+        tx = btc.make_shuffled_tx(self.utxo_tx, self.outputs, False)
         jlog.info('obtained tx\n' + pprint.pformat(btc.deserialize(tx)))
 
         self.latest_tx = btc.deserialize(tx)
@@ -687,7 +687,7 @@ class Taker(object):
             new_utxos_dict = {k: v for k, v in utxos.items() if k in new_utxos}
             for k, v in iteritems(new_utxos_dict):
                 addr = v['address']
-                priv = self.wallet.get_key_from_addr(addr)
+                priv = self.ws.wallet.get_key_from_addr(addr)
                 if priv:  #can be null from create-unsigned
                     priv_utxo_pairs.append((priv, k))
             return priv_utxo_pairs, too_old, too_small
@@ -714,9 +714,9 @@ class Taker(object):
             #in the transaction, about to be consumed, rather than use
             #random utxos that will persist after. At this step we also
             #allow use of external utxos in the json file.
-            if any(self.wallet.get_utxos_by_mixdepth_().values()):
+            if any(self.ws.wallet.get_utxos_by_mixdepth_().values()):
                 utxos = {}
-                for mdutxo in self.wallet.get_utxos_by_mixdepth().values():
+                for mdutxo in self.ws.wallet.get_utxos_by_mixdepth().values():
                     utxos.update(mdutxo)
                 priv_utxo_pairs, to, ts = priv_utxo_pairs_from_utxos(
                     utxos, age, amt)
@@ -740,7 +740,7 @@ class Taker(object):
                     "Commitment sourced OK")
         else:
             errmsgheader, errmsg = generate_podle_error_string(priv_utxo_pairs,
-                        to, ts, self.wallet, self.cjamount,
+                        to, ts, self.ws.wallet, self.cjamount,
                         jm_single().config.get("POLICY", "taker_utxo_age"),
                         jm_single().config.get("POLICY", "taker_utxo_amtpercent"))
 
@@ -766,10 +766,10 @@ class Taker(object):
             utxo = ins['outpoint']['hash'] + ':' + str(ins['outpoint']['index'])
             if utxo not in self.input_utxos.keys():
                 continue
-            script = self.wallet.addr_to_script(self.input_utxos[utxo]['address'])
+            script = self.ws.wallet.addr_to_script(self.input_utxos[utxo]['address'])
             amount = self.input_utxos[utxo]['value']
             our_inputs[index] = (script, amount)
-        self.latest_tx = self.wallet.sign_tx(self.latest_tx, our_inputs)
+        self.latest_tx = self.ws.wallet.sign_tx(self.latest_tx, our_inputs)
 
     def push(self):
         tx = btc.serialize(self.latest_tx)
@@ -783,13 +783,12 @@ class Taker(object):
             notify_addr = btc.address_to_script(self.my_cj_addr)
         else:
             notify_addr = self.my_cj_addr
-        #add the txnotify callbacks *before* pushing in case the
-        #walletnotify is triggered before the notify callbacks are set up;
+        #add the callbacks *before* pushing to ensure triggering;
         #this does leave a dangling notify callback if the push fails, but
         #that doesn't cause problems.
-        jm_single().bc_interface.add_tx_notify(self.latest_tx,
-                    self.unconfirm_callback, self.confirm_callback,
-                    notify_addr, vb=get_p2sh_vbyte())
+        self.ws.register_callbacks([self.unconfirm_callback], "unconfirmed")
+        self.ws.register_callbacks([self.confirm_callback], "confirmed")
+
         tx_broadcast = jm_single().config.get('POLICY', 'tx_broadcast')
         nick_to_use = None
         if tx_broadcast == 'self':
@@ -820,22 +819,38 @@ class Taker(object):
         self.self_sign()
         return self.push()
 
+    def tx_match(self, txd):
+        # Takers process only in series, so this should not occur:
+        assert self.latest_tx is not None
+        # check if the transaction matches our created tx:
+        if txd['outs'] != self.latest_tx['outs']:
+            return False
+        return True
+
     def unconfirm_callback(self, txd, txid):
+        if not self.tx_match(txd):
+            return False
         jlog.info("Transaction seen on network, waiting for confirmation")
         #To allow client to mark transaction as "done" (e.g. by persisting state)
         self.on_finished_callback(True, fromtx="unconfirmed")
         self.waiting_for_conf = True
+        return True
 
     def confirm_callback(self, txd, txid, confirmations):
+        if not self.tx_match(txd):
+            return False
         self.waiting_for_conf = False
         if self.aborted:
-            #do not trigger on_finished processing (abort whole schedule)
-            return
+            #do not trigger on_finished processing (abort whole schedule),
+            # but we still return True as we have finished our listening
+            # for this tx:
+            return True
         jlog.debug("Confirmed callback in taker, confs: " + str(confirmations))
         fromtx=False if self.schedule_index + 1 == len(self.schedule) else True
         waittime = self.schedule[self.schedule_index][4]
         self.on_finished_callback(True, fromtx=fromtx, waittime=waittime,
                                   txdetails=(txd, txid))
+        return True
 
 class P2EPTaker(Taker):
     """ The P2EP Taker will initialize its protocol directly
@@ -845,8 +860,8 @@ class P2EPTaker(Taker):
     improves the privacy of the operation.
     """
 
-    def __init__(self, counterparty, wallet, schedule, callbacks):
-        super(P2EPTaker, self).__init__(wallet, schedule, callbacks=callbacks)
+    def __init__(self, counterparty, wallet_service, schedule, callbacks):
+        super(P2EPTaker, self).__init__(wallet_service, schedule, callbacks=callbacks)
         self.p2ep_receiver_nick = counterparty
         # Callback to request user permission (for e.g. GUI)
         # args: (1) message, as string
@@ -951,7 +966,7 @@ class P2EPTaker(Taker):
         # estimate the fee for the version of the transaction which is
         # not coinjoined:
         est_fee = estimate_tx_fee(len(self.input_utxos), 2,
-                                  txtype=self.wallet.get_txtype())
+                                  txtype=self.ws.wallet.get_txtype())
         my_change_value = my_total_in - self.cjamount - est_fee
         if my_change_value <= 0:
             # as discussed in initialize(), this should be an extreme edge case.
@@ -973,7 +988,7 @@ class P2EPTaker(Taker):
             "getblockchaininfo", [])["blocks"]
         # As for JM coinjoins, the `None` key is used for our own inputs
         # to the transaction; this preparatory version contains only those.
-        tx = make_shuffled_tx(self.utxos[None], self.outputs,
+        tx = btc.make_shuffled_tx(self.utxos[None], self.outputs,
                               False, 2, currentblock)
         jlog.info('Created proposed fallback tx\n' + pprint.pformat(
             btc.deserialize(tx)))
@@ -984,10 +999,10 @@ class P2EPTaker(Taker):
         dtx = btc.deserialize(tx)
         for index, ins in enumerate(dtx['ins']):
             utxo = ins['outpoint']['hash'] + ':' + str(ins['outpoint']['index'])
-            script = self.wallet.addr_to_script(self.input_utxos[utxo]['address'])
+            script = self.ws.wallet.addr_to_script(self.input_utxos[utxo]['address'])
             amount = self.input_utxos[utxo]['value']
             our_inputs[index] = (script, amount)
-        self.signed_noncj_tx = btc.serialize(self.wallet.sign_tx(dtx, our_inputs))
+        self.signed_noncj_tx = btc.serialize(self.ws.wallet.sign_tx(dtx, our_inputs))
         self.taker_info_callback("INFO", "Built tx proposal, sending to receiver.")
         return (True, [self.p2ep_receiver_nick], self.signed_noncj_tx)
 
@@ -1153,7 +1168,7 @@ class P2EPTaker(Taker):
         # in joinmarket.cfg; allow either (a) automatic agreement for any value within
         # a range of 0.3 to 3x this figure, or (b) user to agree on prompt.
         fee_est = estimate_tx_fee(len(tx['ins']), len(tx['outs']),
-                                  txtype=self.wallet.get_txtype())
+                                  txtype=self.ws.wallet.get_txtype())
         fee_ok = False
         if btc_fee > 0.3 * fee_est and btc_fee < 3 * fee_est:
             fee_ok = True

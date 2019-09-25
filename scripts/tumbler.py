@@ -11,7 +11,7 @@ from twisted.python.log import startLogging
 from jmclient import Taker, load_program_config, get_schedule,\
     JMClientProtocolFactory, start_reactor, jm_single, get_wallet_path,\
     open_test_wallet_maybe, sync_wallet, get_tumble_schedule,\
-    schedule_to_text, restart_waiter,\
+    schedule_to_text, restart_waiter, WalletService,\
     get_tumble_log, tumbler_taker_finished_update,\
     tumbler_filter_orders_callback
 from jmbase.support import get_log, jmprint
@@ -38,13 +38,12 @@ def main():
     #Load the wallet
     wallet_name = args[0]
     max_mix_depth = options['mixdepthsrc'] + options['mixdepthcount']
+    if options['amtmixdepths'] > max_mix_depth:
+        max_mix_depth = options['amtmixdepths']
     wallet_path = get_wallet_path(wallet_name, None)
     wallet = open_test_wallet_maybe(wallet_path, wallet_name, max_mix_depth)
-    if jm_single().config.get("BLOCKCHAIN",
-                              "blockchain_source") == "electrum-server":
-        jm_single().bc_interface.synctype = "with-script"
-    while not jm_single().bc_interface.wallet_synced:
-        sync_wallet(wallet, fast=not options['recoversync'])
+    ws = WalletService(wallet)
+    ws.startService()
 
     maxcjfee = get_max_cj_fee_values(jm_single().config, options_org)
     log.info("Using maximum coinjoin fee limits per maker of {:.4%}, {} sat"
@@ -126,7 +125,7 @@ def main():
             reactor.callLater(waittime*60, clientfactory.getClient().clientStart)
 
     #instantiate Taker with given schedule and run
-    taker = Taker(wallet,
+    taker = Taker(ws,
                   schedule,
                   order_chooser=options['order_choose_fn'],
                   max_cj_fee=maxcjfee,

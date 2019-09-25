@@ -16,7 +16,7 @@ from .taker import Taker, P2EPTaker
 from .wallet import (Mnemonic, estimate_tx_fee, WalletError, BaseWallet, ImportWalletMixin,
                      BIP39WalletMixin, BIP32Wallet, BIP49Wallet, LegacyWallet,
                      SegwitWallet, SegwitLegacyWallet, UTXOManager,
-                     WALLET_IMPLEMENTATIONS, make_shuffled_tx)
+                     WALLET_IMPLEMENTATIONS)
 from .storage import (Argon2Hash, Storage, StorageError,
                       StoragePasswordError, VolatileStorage)
 from .cryptoengine import BTCEngine, BTC_P2PKH, BTC_P2SH_P2WPKH, EngineError

@@ -598,7 +598,7 @@ def wallet_fetch_history(wallet, options):
     tx_db.execute("CREATE TABLE transactions(txid TEXT, "
             "blockhash TEXT, blocktime INTEGER);")
     jm_single().debug_silence[0] = True
-    wallet_name = jm_single().bc_interface.get_wallet_name(wallet)
+    wallet_name = wallet.get_wallet_name()
     buf = range(1000)
     t = 0
     while len(buf) == 1000:
