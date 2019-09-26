@@ -72,7 +72,7 @@ from jmclient import load_program_config, get_network,\
     open_test_wallet_maybe, get_wallet_path, get_p2sh_vbyte, get_p2pk_vbyte,\
     jm_single, validate_address, weighted_order_choose, Taker,\
     JMClientProtocolFactory, start_reactor, get_schedule, schedule_to_text,\
-    get_blockchain_interface_instance, direct_send,\
+    get_blockchain_interface_instance, direct_send, WalletService,\
     RegtestBitcoinCoreInterface, tumbler_taker_finished_update,\
     get_tumble_log, restart_wait, tumbler_filter_orders_callback,\
     wallet_generate_recover_bip39, wallet_display, get_utxos_enabled_disabled
@@ -640,7 +640,7 @@ class SpendTab(QWidget):
         self.startJoin()
 
     def startJoin(self):
-        if not w.wallet:
+        if not w.ws:
             JMQtMessageBox(self, "Cannot start without a loaded wallet.",
                            mbtype="crit", title="Error")
             return
@@ -654,7 +654,7 @@ class SpendTab(QWidget):
             check_offers_callback = None
 
         destaddrs = self.tumbler_destaddrs if self.tumbler_options else []
-        self.taker = Taker(w.wallet,
+        self.taker = Taker(w.ws,
                            self.spendstate.loaded_schedule,
                            order_chooser=weighted_order_choose,
                            callbacks=[check_offers_callback,
@@ -797,7 +797,7 @@ class SpendTab(QWidget):
             #TODO prob best to completely fold multiple and tumble to reduce
             #complexity/duplication
             if self.spendstate.typestate == 'multiple' and not self.tumbler_options:
-                self.taker.wallet.update_cache_index()
+                self.taker.ws.save_wallet()
             return
         if fromtx:
             if res:
@@ -811,12 +811,6 @@ class SpendTab(QWidget):
                 self.nextTxTimer.start(int(waittime*60*1000))
                 #QtCore.QTimer.singleShot(int(self.taker_finished_waittime*60*1000),
                 #                         self.startNextTransaction)
-                #see note above re multiple/tumble duplication
-                if self.spendstate.typestate == 'multiple' and \
-                   not self.tumbler_options:
-                    txd, txid = txdetails
-                    self.taker.wallet.remove_old_utxos(txd)
-                    self.taker.wallet.add_new_utxos(txd, txid)
             else:
                 if self.tumbler_options:
                     w.statusBar().showMessage("Transaction failed, trying again...")
@@ -915,7 +909,7 @@ class SpendTab(QWidget):
             if len(self.widgets[i][1].text()) == 0:
                 JMQtMessageBox(self, errs[i - 1], mbtype='warn', title="Error")
                 return False
-        if not w.wallet:
+        if not w.ws:
             JMQtMessageBox(self,
                            "There is no wallet loaded.",
                            mbtype='warn',
@@ -1037,13 +1031,13 @@ class CoinsTab(QWidget):
             self.cTW.addChild(m_item)
             self.cTW.show()
 
-        if not w.wallet:
+        if not w.ws:
             show_blank()
             return
         utxos_enabled = {}
         utxos_disabled = {}
         for i in range(jm_single().config.getint("GUI", "max_mix_depth")):
-            utxos_e, utxos_d = get_utxos_enabled_disabled(w.wallet, i)
+            utxos_e, utxos_d = get_utxos_enabled_disabled(w.ws, i)
             if utxos_e != {}:
                 utxos_enabled[i] = utxos_e
             if utxos_d != {}:
@@ -1070,7 +1064,7 @@ class CoinsTab(QWidget):
                         # txid:index, btc, address
                         t = btc.safe_hexlify(k[0])+":"+str(k[1])
                         s = "{0:.08f}".format(v['value']/1e8)
-                        a = w.wallet.script_to_addr(v["script"])
+                        a = w.ws.script_to_addr(v["script"])
                         item = QTreeWidgetItem([t, s, a])
                         item.setFont(0, QFont(MONOSPACE_FONT))
                         #if rows[i][forchange][j][3] != 'new':
@@ -1080,7 +1074,7 @@ class CoinsTab(QWidget):
 
     def toggle_utxo_disable(self, txid, idx):
         txid_bytes = btc.safe_from_hex(txid)
-        w.wallet.toggle_disable_utxo(txid_bytes, idx)
+        w.ws.toggle_disable_utxo(txid_bytes, idx)
         self.updateUtxos()
 
     def create_menu(self, position):
@@ -1179,30 +1173,37 @@ class JMWalletTab(QWidget):
         if xpub_exists:
             menu.addAction("Copy extended pubkey to clipboard",
                            lambda: app.clipboard().setText(xpub))
-        menu.addAction("Resync wallet from blockchain",
-                       lambda: w.resyncWallet())
         #TODO add more items to context menu
-        menu.exec_(self.walletTree.viewport().mapToGlobal(position))
+        if address_valid or xpub_exists:
+            menu.exec_(self.walletTree.viewport().mapToGlobal(position))
 
     def openQRCodePopup(self, address):
         popup = BitcoinQRCodePopup(self, address)
         popup.show()
 
     def updateWalletInfo(self, walletinfo=None):
+        nm = jm_single().config.getint("GUI", "max_mix_depth")
         l = self.walletTree
+
+        # before deleting, note whether items were expanded
+        esrs = []
+        for i in range(l.topLevelItemCount()):
+            expandedness = l.invisibleRootItem().child(i).isExpanded()
+            esrs.append(expandedness)
         l.clear()
         if walletinfo:
             self.mainwindow = self.parent().parent().parent()
             rows, mbalances, xpubs, total_bal = walletinfo
             if jm_single().config.get("BLOCKCHAIN", "blockchain_source") == "regtest":
-                self.wallet_name = self.mainwindow.wallet.seed
+                self.wallet_name = self.mainwindow.testwalletname
             else:
-                self.wallet_name = os.path.basename(self.mainwindow.wallet._storage.path)
+                self.wallet_name = os.path.basename(
+                    self.mainwindow.ws.wallet._storage.path)
             self.label1.setText("CURRENT WALLET: " + self.wallet_name +
                                 ', total balance: ' + total_bal)
-            self.walletTree.show()
+            l.show()
 
-        for i in range(jm_single().config.getint("GUI", "max_mix_depth")):
+        for i in range(nm):
             if walletinfo:
                 mdbalance = mbalances[i]
             else:
@@ -1210,6 +1211,10 @@ class JMWalletTab(QWidget):
             m_item = QTreeWidgetItem(["Mixdepth " + str(i) + " , balance: " +
                                       mdbalance, '', '', '', ''])
             l.addChild(m_item)
+            # if expansion states existed, reinstante them:
+            if len(esrs) == nm:
+                m_item.setExpanded(esrs[i])
+
             for forchange in [0, 1]:
                 heading = "EXTERNAL" if forchange == 0 else "INTERNAL"
                 if walletinfo and heading == "EXTERNAL":
@@ -1238,7 +1243,14 @@ class JMMainWindow(QMainWindow):
 
     def __init__(self, reactor):
         super(JMMainWindow, self).__init__()
-        self.wallet = None
+        # the wallet service that encapsulates
+        # the wallet we will interact with
+        self.ws = None
+
+        # the monitoring loop that queries
+        # the walletservice to update the GUI
+        self.walletRefresh = None
+
         self.reactor = reactor
         self.initUI()
 
@@ -1321,7 +1333,7 @@ class JMMainWindow(QMainWindow):
         msgbox.exec_()
 
     def exportPrivkeysJson(self):
-        if not self.wallet:
+        if not self.ws:
             JMQtMessageBox(self,
                            "No wallet loaded.",
                            mbtype='crit',
@@ -1351,7 +1363,7 @@ class JMMainWindow(QMainWindow):
         #option for anyone with gaplimit troubles, although
         #that is a complete mess for a user, mostly changing
         #the gaplimit in the Settings tab should address it.
-        rows = get_wallet_printout(self.wallet)
+        rows = get_wallet_printout(self.ws)
         addresses = []
         for forchange in rows[0]:
             for mixdepth in forchange:
@@ -1365,7 +1377,7 @@ class JMMainWindow(QMainWindow):
                 time.sleep(0.1)
                 if done:
                     break
-                priv = self.wallet.get_key_from_addr(addr)
+                priv = self.ws.get_key_from_addr(addr)
                 private_keys[addr] = btc.wif_compressed_privkey(
                     priv,
                     vbyte=get_p2pk_vbyte())
@@ -1479,7 +1491,7 @@ class JMMainWindow(QMainWindow):
                                    title="Wallet created")
         self.initWallet(seed=self.walletname, restart_cb=self.restartForScan)
 
-    def selectWallet(self, testnet_seed=None):
+    def selectWallet(self, testnet_seed=None, restart_cb=None):
         if jm_single().config.get("BLOCKCHAIN", "blockchain_source") != "regtest":
             current_path = os.path.dirname(os.path.realpath(__file__))
             if os.path.isdir(os.path.join(current_path, 'wallets')):
@@ -1501,7 +1513,7 @@ class JMMainWindow(QMainWindow):
                 if not ok:
                     return
                 pwd = str(text).strip()
-                decrypted = self.loadWalletFromBlockchain(firstarg[0], pwd, restart_cb=self.restartForScan)
+                decrypted = self.loadWalletFromBlockchain(firstarg[0], pwd, restart_cb)
         else:
             if not testnet_seed:
                 testnet_seed, ok = QInputDialog.getText(self,
@@ -1519,7 +1531,7 @@ class JMMainWindow(QMainWindow):
         if firstarg:
             wallet_path = get_wallet_path(str(firstarg), None)
             try:
-                self.wallet = open_test_wallet_maybe(wallet_path, str(firstarg),
+                wallet = open_test_wallet_maybe(wallet_path, str(firstarg),
                         None, ask_for_password=False, password=pwd.encode('utf-8') if pwd else None,
                         gap_limit=jm_single().config.getint("GUI", "gaplimit"))
             except Exception as e:
@@ -1528,57 +1540,36 @@ class JMMainWindow(QMainWindow):
                                mbtype='warn',
                                title="Error")
                 return False
-            self.wallet.seed = str(firstarg)
+            # only used for GUI display on regtest:
+            self.testwalletname = wallet.seed = str(firstarg)
         if 'listunspent_args' not in jm_single().config.options('POLICY'):
             jm_single().config.set('POLICY', 'listunspent_args', '[0]')
-        assert self.wallet, "No wallet loaded"
-        reactor.callLater(0, self.syncWalletUpdate, True, restart_cb)
+        assert wallet, "No wallet loaded"
+
+        # shut down any existing wallet service
+        # monitoring loops
+        if self.ws is not None:
+            if self.ws.isRunning():
+                self.ws.stopService()
+        if self.walletRefresh is not None:
+            self.walletRefresh.stop()
+
+        self.ws = WalletService(wallet)
+        self.ws.startService()
+        self.walletRefresh = task.LoopingCall(self.updateWalletInfo)
+        self.walletRefresh.start(5.0)
+
         self.statusBar().showMessage("Reading wallet from blockchain ...")
         return True
 
-    def syncWalletUpdate(self, fast, restart_cb=None):
-        if restart_cb:
-            fast=False
-        #Special syncing condition for Electrum
-        iselectrum = jm_single().config.get("BLOCKCHAIN",
-                            "blockchain_source") == "electrum-server"
-        if iselectrum:
-            jm_single().bc_interface.synctype = "with-script"
-
-        jm_single().bc_interface.sync_wallet(self.wallet, fast=fast,
-                                             restart_cb=restart_cb)
-
-        if iselectrum:
-            #sync_wallet only initialises, we must manually call its entry
-            #point here (because we can't use connectionMade as a trigger)
-            jm_single().bc_interface.sync_addresses(self.wallet)
-            self.wait_for_sync_loop = task.LoopingCall(self.updateWalletInfo)
-            self.wait_for_sync_loop.start(0.2)
-        else:
-            self.updateWalletInfo()
-
     def updateWalletInfo(self):
-        if jm_single().config.get("BLOCKCHAIN",
-                            "blockchain_source") == "electrum-server":
-            if not jm_single().bc_interface.wallet_synced:
-                return
-            self.wait_for_sync_loop.stop()
         t = self.centralWidget().widget(0)
-        if not self.wallet:  #failure to sync in constructor means object is not created
+        if not self.ws:  #failure to sync in constructor means object is not created
             newstmsg = "Unable to sync wallet - see error in console."
         else:
-            t.updateWalletInfo(get_wallet_printout(self.wallet))
+            t.updateWalletInfo(get_wallet_printout(self.ws))
             newstmsg = "Wallet synced successfully."
         self.statusBar().showMessage(newstmsg)
-
-    def resyncWallet(self):
-        if not self.wallet:
-            JMQtMessageBox(self,
-                           "No wallet loaded",
-                           mbtype='warn',
-                           title="Error")
-            return
-        self.loadWalletFromBlockchain()
 
     def generateWallet(self):
         log.debug('generating wallet')
@@ -1689,8 +1680,8 @@ class JMMainWindow(QMainWindow):
         self.loadWalletFromBlockchain(self.walletname, pwd=self.textpassword,
                                       restart_cb=restart_cb)
 
-def get_wallet_printout(wallet):
-    """Given a joinmarket wallet, retrieve the list of
+def get_wallet_printout(ws):
+    """Given a WalletService object, retrieve the list of
     addresses and corresponding balances to be displayed.
     We retrieve a WalletView abstraction, and iterate over
     sub-objects to arrange the per-mixdepth and per-address lists.
@@ -1701,7 +1692,7 @@ def get_wallet_printout(wallet):
     xpubs: [[xpubext, xpubint], ...]
     Bitcoin amounts returned are in btc, not satoshis
     """
-    walletview = wallet_display(wallet, jm_single().config.getint("GUI",
+    walletview = wallet_display(ws, jm_single().config.getint("GUI",
                                             "gaplimit"), False, serialized=False)
     rows = []
     mbalances = []

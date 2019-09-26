@@ -46,65 +46,6 @@ class WalletService(Service):
         # i.e. they are not new but we want to track:
         self.active_txids = []
 
-    """ The following functions are pure pass through but
-    are replicated here from the underlying wallet to
-    preserve encapsulation.
-    """
-
-    def get_txtype(self):
-        return self.wallet.get_txtype()
-
-    def get_utxos_by_mixdepth(self):
-        return self.wallet.get_utxos_by_mixdepth()
-
-    def select_utxos(self, mixdepth, amount):
-        return self.wallet.select_utxos(mixdepth, amount)
-
-    def get_internal_addr(self, mixdepth):
-        if self.bci is not None and hasattr(self.bci, 'import_addresses'):
-            # we aggressively import ahead of our index, so that when
-            # detailed sync is needed in future, it will not find
-            # imports missing (and this operation costs nothing).
-            addrs_to_import = list(self.wallet.collect_addresses_gap())
-            self.bci.import_addresses(addrs_to_import,
-                                      self.wallet.get_wallet_name())
-        return self.wallet.get_internal_addr(mixdepth)
-
-    def get_external_addr(self, mixdepth):
-        if self.bci is not None and hasattr(self.bci, 'import_addresses'):
-            # we aggressively import ahead of our index, so that when
-            # detailed sync is needed in future, it will not find
-            # imports missing (and this operation costs nothing).
-            addrs_to_import = list(self.wallet.collect_addresses_gap())
-            self.bci.import_addresses(addrs_to_import,
-                                      self.wallet.get_wallet_name())
-        return self.wallet.get_external_addr(mixdepth)
-
-    def get_new_addr(self, mixdepth, internal):
-        """ A wrapper around get_internal_addr/
-        get_external_addr, only used externally.
-        """
-        if internal:
-            return self.get_internal_addr(mixdepth)
-        else:
-            return self.get_external_addr(mixdepth)
-
-    def save_wallet(self):
-        self.wallet.save()
-
-    def get_key_from_addr(self, address):
-        return self.wallet.get_key_from_addr(address)
-
-    def pubkey_has_script(self, pubkey, script):
-        return self.wallet.pubkey_has_script(pubkey, script)
-
-    def addr_to_script(self, address):
-        return self.wallet.addr_to_script(address)
-
-    def sign_tx(self, tx, scripts, **kwargs):
-        return self.wallet.sign_tx(tx, scripts, **kwargs)
-
-
     def startService(self):
         """ Encapsulates start up actions.
         Here wallet sync.
@@ -119,6 +60,11 @@ class WalletService(Service):
         """
         self.monitor_loop.stop()
         Service.stopService(self)
+
+    def isRunning(self):
+        if self.running == 1:
+            return True
+        return False
 
     def request_sync_wallet(self):
         """ Ensures wallet sync is complete
@@ -250,3 +196,97 @@ class WalletService(Service):
                             self.confirmed_callbacks.remove(f)
                             if txid in self.active_txids:
                                 self.active_txids.remove(txid)
+
+    """ The following functions mostly are pure pass through
+    but are replicated here from the underlying wallet to
+    preserve encapsulation.
+    """
+
+    def get_txtype(self):
+        return self.wallet.get_txtype()
+
+    def get_utxos_by_mixdepth(self, include_disabled=False):
+        return self.wallet.get_utxos_by_mixdepth_(
+            include_disabled=include_disabled)
+
+    def select_utxos(self, mixdepth, amount):
+        return self.wallet.select_utxos(mixdepth, amount)
+
+    def get_internal_addr(self, mixdepth):
+        if self.bci is not None and hasattr(self.bci, 'import_addresses'):
+            # we aggressively import ahead of our index, so that when
+            # detailed sync is needed in future, it will not find
+            # imports missing (and this operation costs nothing).
+            addrs_to_import = list(self.wallet.collect_addresses_gap())
+            self.bci.import_addresses(addrs_to_import,
+                                      self.wallet.get_wallet_name())
+        return self.wallet.get_internal_addr(mixdepth)
+
+    def get_external_addr(self, mixdepth):
+        if self.bci is not None and hasattr(self.bci, 'import_addresses'):
+            # we aggressively import ahead of our index, so that when
+            # detailed sync is needed in future, it will not find
+            # imports missing (and this operation costs nothing).
+            addrs_to_import = list(self.wallet.collect_addresses_gap())
+            self.bci.import_addresses(addrs_to_import,
+                                      self.wallet.get_wallet_name())
+        return self.wallet.get_external_addr(mixdepth)
+
+    def get_new_addr(self, mixdepth, internal):
+        """ A wrapper around get_internal_addr/
+        get_external_addr, only used externally.
+        """
+        if internal:
+            return self.get_internal_addr(mixdepth)
+        else:
+            return self.get_external_addr(mixdepth)
+
+    def save_wallet(self):
+        self.wallet.save()
+
+    def get_key_from_addr(self, address):
+        return self.wallet.get_key_from_addr(address)
+
+    def pubkey_has_script(self, pubkey, script):
+        return self.wallet.pubkey_has_script(pubkey, script)
+
+    def addr_to_script(self, address):
+        return self.wallet.addr_to_script(address)
+
+    def script_to_addr(self, script):
+        return self.wallet.script_to_addr(script)
+
+    def sign_tx(self, tx, scripts, **kwargs):
+        return self.wallet.sign_tx(tx, scripts, **kwargs)
+
+    def get_bip32_pub_export(self, mixdepth=None, internal=None):
+        return self.wallet.get_bip32_pub_export(
+            mixdepth=mixdepth, internal=internal)
+
+    def get_next_unused_index(self, mixdepth, internal):
+        return self.wallet.get_next_unused_index(mixdepth, internal)
+
+    def get_path(self, mixdepth=None, internal=None, index=None):
+        return self.wallet.get_path(mixdepth, internal, index)
+
+    def get_addr_path(self, path):
+        return self.wallet.get_addr_path(path)
+
+    def get_script_path(self, path):
+        return self.wallet.get_script_path(path)
+
+    def get_wif_path(self, path):
+        return self.wallet.get_wif_path(path)
+
+    def get_path_repr(self, path):
+        return self.wallet.get_path_repr(path)
+
+    def set_next_index(self, mixdepth, internal, index, force=False):
+        return self.wallet.set_next_index(mixdepth, internal, index,
+                                          force=force)
+
+    def yield_imported_paths(self, mixdepth):
+        return self.wallet.yield_imported_paths(mixdepth)
+
+    def toggle_disable_utxo(self, txid, index):
+        return self.wallet.toggle_disable_utxo(txid, index)

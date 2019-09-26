@@ -16,6 +16,7 @@ from jmclient import (get_network, WALLET_IMPLEMENTATIONS, Storage, podle,
     jm_single, BitcoinCoreInterface, JsonRpcError, sync_wallet, WalletError,
     VolatileStorage, StoragePasswordError, is_segwit_mode, SegwitLegacyWallet,
     LegacyWallet, SegwitWallet, is_native_segwit_mode)
+from jmclient.wallet_service import WalletService
 from jmbase.support import get_password, jmprint
 from .cryptoengine import TYPE_P2PKH, TYPE_P2SH_P2WPKH, TYPE_P2WPKH
 from .output import fmt_utxo
@@ -328,22 +329,22 @@ def get_tx_info(txid):
         rpctx.get('blocktime', 0), txd
 
 
-def get_imported_privkey_branch(wallet, m, showprivkey):
+def get_imported_privkey_branch(ws, m, showprivkey):
     entries = []
-    for path in wallet.yield_imported_paths(m):
-        addr = wallet.get_addr_path(path)
-        script = wallet.get_script_path(path)
+    for path in ws.yield_imported_paths(m):
+        addr = ws.get_addr_path(path)
+        script = ws.get_script_path(path)
         balance = 0.0
-        for data in wallet.get_utxos_by_mixdepth_(
+        for data in ws.get_utxos_by_mixdepth(
                 include_disabled=True)[m].values():
             if script == data['script']:
                 balance += data['value']
         used = ('used' if balance > 0.0 else 'empty')
         if showprivkey:
-            wip_privkey = wallet.get_wif_path(path)
+            wip_privkey = ws.get_wif_path(path)
         else:
             wip_privkey = ''
-        entries.append(WalletViewEntry(wallet.get_path_repr(path), m, -1,
+        entries.append(WalletViewEntry(ws.get_path_repr(path), m, -1,
                                        0, addr, [balance, balance],
                                        used=used, priv=wip_privkey))
 
@@ -377,7 +378,7 @@ def wallet_showutxos(wallet, showprivkey):
     return json.dumps(unsp, indent=4)
 
 
-def wallet_display(wallet, gaplimit, showprivkey, displayall=False,
+def wallet_display(ws, gaplimit, showprivkey, displayall=False,
         serialized=True, summarized=False):
     """build the walletview object,
     then return its serialization directly if serialized,
@@ -412,45 +413,45 @@ def wallet_display(wallet, gaplimit, showprivkey, displayall=False,
     acctlist = []
     # TODO - either optionally not show disabled utxos, or
     # mark them differently in display (labels; colors)
-    utxos = wallet.get_utxos_by_mixdepth_(include_disabled=True)
-    for m in range(wallet.mixdepth + 1):
+    utxos = ws.get_utxos_by_mixdepth(include_disabled=True)
+    for m in range(ws.wallet.mixdepth + 1):
         branchlist = []
         for forchange in [0, 1]:
             entrylist = []
             if forchange == 0:
                 # users would only want to hand out the xpub for externals
-                xpub_key = wallet.get_bip32_pub_export(m, forchange)
+                xpub_key = ws.get_bip32_pub_export(m, forchange)
             else:
                 xpub_key = ""
 
-            unused_index = wallet.get_next_unused_index(m, forchange)
+            unused_index = ws.get_next_unused_index(m, forchange)
             for k in range(unused_index + gaplimit):
-                path = wallet.get_path(m, forchange, k)
-                addr = wallet.get_addr_path(path)
+                path = ws.get_path(m, forchange, k)
+                addr = ws.get_addr_path(path)
                 balance, used = get_addr_status(
                     path, utxos[m], k >= unused_index, forchange)
                 if showprivkey:
-                    privkey = wallet.get_wif_path(path)
+                    privkey = ws.get_wif_path(path)
                 else:
                     privkey = ''
                 if (displayall or balance > 0 or
                         (used == 'new' and forchange == 0)):
                     entrylist.append(WalletViewEntry(
-                        wallet.get_path_repr(path), m, forchange, k, addr,
+                        ws.get_path_repr(path), m, forchange, k, addr,
                         [balance, balance], priv=privkey, used=used))
-            wallet.set_next_index(m, forchange, unused_index)
-            path = wallet.get_path_repr(wallet.get_path(m, forchange))
+            ws.set_next_index(m, forchange, unused_index)
+            path = ws.get_path_repr(ws.get_path(m, forchange))
             branchlist.append(WalletViewBranch(path, m, forchange, entrylist,
                                                xpub=xpub_key))
-        ipb = get_imported_privkey_branch(wallet, m, showprivkey)
+        ipb = get_imported_privkey_branch(ws, m, showprivkey)
         if ipb:
             branchlist.append(ipb)
         #get the xpub key of the whole account
-        xpub_account = wallet.get_bip32_pub_export(mixdepth=m)
-        path = wallet.get_path_repr(wallet.get_path(m))
+        xpub_account = ws.get_bip32_pub_export(mixdepth=m)
+        path = ws.get_path_repr(ws.get_path(m))
         acctlist.append(WalletViewAccount(path, m, branchlist,
                                           xpub=xpub_account))
-    path = wallet.get_path_repr(wallet.get_path())
+    path = ws.get_path_repr(ws.get_path())
     walletview = WalletView(path, acctlist)
     if serialized:
         return walletview.serialize(summarize=summarized)
@@ -943,11 +944,11 @@ def display_utxos_for_disable_choice_default(utxos_enabled, utxos_disabled):
     disable = False if chosen_idx <= disabled_max else True
     return ulist[chosen_idx], disable
 
-def get_utxos_enabled_disabled(wallet, md):
+def get_utxos_enabled_disabled(ws, md):
     """ Returns dicts for enabled and disabled separately
     """
-    utxos_enabled = wallet.get_utxos_by_mixdepth_()[md]
-    utxos_all = wallet.get_utxos_by_mixdepth_(include_disabled=True)[md]
+    utxos_enabled = ws.get_utxos_by_mixdepth()[md]
+    utxos_all = ws.get_utxos_by_mixdepth(include_disabled=True)[md]
     utxos_disabled_keyset = set(utxos_all).difference(set(utxos_enabled))
     utxos_disabled = {}
     for u in utxos_disabled_keyset:
@@ -1188,14 +1189,19 @@ def wallet_tool_main(wallet_root_path):
                 jm_single().config.set('POLICY','listunspent_args', '[0]')
             while not jm_single().bc_interface.wallet_synced:
                 sync_wallet(wallet, fast=not options.recoversync)
+
+    # this object is only to respect the layering,
+    # the service will not be started since this is a synchronous script:
+    ws = WalletService(wallet)
+
     #Now the wallet/data is prepared, execute the script according to the method
     if method == "display":
-        return wallet_display(wallet, options.gaplimit, options.showprivkey)
+        return wallet_display(ws, options.gaplimit, options.showprivkey)
     elif method == "displayall":
-        return wallet_display(wallet, options.gaplimit, options.showprivkey,
+        return wallet_display(ws, options.gaplimit, options.showprivkey,
                               displayall=True)
     elif method == "summary":
-        return wallet_display(wallet, options.gaplimit, options.showprivkey, summarized=True)
+        return wallet_display(ws, options.gaplimit, options.showprivkey, summarized=True)
     elif method == "history":
         if not isinstance(jm_single().bc_interface, BitcoinCoreInterface):
             jmprint('showing history only available when using the Bitcoin Core ' +
